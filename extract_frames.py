@@ -104,7 +104,7 @@ def main():
     
     print("\nFlags:")
     for k, v in args.items():
-        print("{}: {}".format(k, v))
+        print("- {}: {}".format(k, v))
     print()
 
     try:
