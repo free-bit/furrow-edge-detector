@@ -240,34 +240,53 @@ def apply_hough_line(bin_image, visualize=True, print_lines=20, plot_hough_space
     """
     print("Applying Hough line with args:", kwargs)
 
-    num_samples = np.abs(kwargs["max_theta"] - kwargs["min_theta"]) * kwargs["resolution"]
-    test_angles = np.linspace(np.deg2rad(kwargs["min_theta"]), np.deg2rad(kwargs["max_theta"]), num_samples)
+    num_samples = 180 * kwargs["theta_res"]
+    test_angles = np.linspace(0, np.pi, num_samples)
     
-    votes, theta, rho = hough_line(bin_image, theta=test_angles)
+    votes, thetas, rhos = hough_line(bin_image, theta=test_angles)
     print(f"[Info]: Max vote is {votes.max()}")
-    peak_params = hough_line_peaks(votes, theta, rho,
+    peak_params = hough_line_peaks(votes, thetas, rhos,
                                    num_peaks=kwargs["num_lines"],
                                    threshold=None if kwargs["adaptive_thresh"] else kwargs["threshold"],
                                    min_distance=kwargs["min_distance"], 
                                    min_angle=kwargs["min_angle"])
     
-    # Visualize Hough space
+    # (votes: np.array, thetas: np.array, rhos: np.array) -> np.array([[vote0, theta0, rho0], ...)
+    peak_params = np.stack(peak_params, axis=1)
+
+    # Apply rho and theta filters to the results
+    extra_filters = (np.deg2rad(kwargs["min_theta"]) <= peak_params[:, 1]) & (np.deg2rad(peak_params[:, 1]) <= kwargs["max_theta"])
+    extra_filters &= (kwargs["min_rho"] <= peak_params[:, 2]) & (peak_params[:, 2] <= kwargs["max_rho"])
+    peak_params = peak_params[extra_filters]
+    num_lines = peak_params.shape[0]
+
+    # Visualize detected line as points in the Hough space
     if plot_hough_space:
         print("[Info]: Visualizing Hough space.")
+        
         plt.figure(figsize=(10,10))
-        plt.imshow(np.log(1 + votes),
-                   extent=[np.rad2deg(theta[0]), np.rad2deg(theta[-1]), rho[0], rho[-1]],
-                   cmap="gray")
         plt.title('Hough Space')
         plt.xlabel('Angles (degrees)')
         plt.ylabel('Distance (pixels)')
-        plt.axis('auto')
+        
+        # Visualize votes
+        plt.imshow(np.log(1 + votes),
+                   extent=[np.rad2deg(thetas[0]), np.rad2deg(thetas[-1]), rhos[-1], rhos[0]],
+                   cmap="gray")
         plt.grid(color='r', linestyle='--', linewidth=1)
+        plt.axis('auto')
+
+        # Mark detected peaks
+        t = np.rad2deg(peak_params[:, 1])
+        r = peak_params[:, 2]
+        plt.scatter(t, r, color='blue', marker='x')
+        for idx in range(len(r)):
+            plt.annotate(idx+1, (t[idx], r[idx]), 
+                         fontsize="large", 
+                         color="blue",
+                         textcoords="offset pixels", 
+                         xytext=(-5,5))
         plt.show()
-    
-    # (votes: np.array, thetas: np.array, rhos: np.array) -> np.array((vote0, theta0, rho0), ...)
-    peak_params = np.array(list(zip(*peak_params)))
-    num_lines = len(peak_params)
     
     # Print parameters of detected lines
     if print_lines > 0:
@@ -289,7 +308,7 @@ def apply_hough_line(bin_image, visualize=True, print_lines=20, plot_hough_space
         pixel_coords = utils.compute_line_pixels(bin_image.shape, rho, theta)
         line_list.append(pixel_coords)
     
-    # Visualize all lines found
+    # Visualize binary mask for all lines found
     if visualize:
         utils.show_shapes(np.zeros_like(bin_image, dtype=np.uint8), line_list, shapeIdx="all", cmap="gray")
         
