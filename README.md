@@ -1,5 +1,9 @@
 # Computer Vision Techniques in Localization of Agricultural Vehicles
 
+## Install Dependencies
+
+`conda env create -f environment.yml`
+
 ## Useful Links
 
 ### librealsense
