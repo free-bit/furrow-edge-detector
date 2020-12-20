@@ -2,11 +2,11 @@
 # Define image processing functions to be used here.
 
 import cv2
+from cyvlfeat.sift import sift, dsift, phow
 from matplotlib import pyplot as plt
 import numpy as np
 from skimage import filters
 from skimage.transform import hough_line, hough_line_peaks
-from skimage.feature import haar_like_feature_coord
 from skimage.measure import find_contours
 from skimage.morphology import convex_hull_image
 
@@ -34,6 +34,25 @@ def apply_threshold(gray_img, visualize=True, **kwargs):
     if visualize:
         utils.show_image(gray_img, cmap="gray")
     return gray_img
+
+def apply_channelwise_threshold(image, visualize=True, **kwargs):
+    """Takes multi-channel image, applies different threshold per channel, returns thresholded version."""
+    print("Applying channelwise threshold with args:", kwargs)
+    C = image.shape[2]
+    max_vals = np.array(kwargs.get("max_vals", (255,)*C))
+    min_vals = np.array(kwargs.get("min_vals", (0,)*C))
+    assert len(max_vals) == len(min_vals)
+    assert len(max_vals) == C
+    assert np.all(0 <= min_vals) 
+    assert np.all(max_vals >= min_vals) 
+    assert np.all(max_vals <= 255)
+
+    mask = (min_vals <= image) & (image <= max_vals)            # Apply two ends of threshold for each channel individually
+    mask = np.bitwise_and.reduce(mask, axis=2)[..., np.newaxis] # Reduce binary masks with C-channels into 1-channel by taking AND over channels
+    thresh_image = image * mask
+    if visualize:
+        utils.show_image(thresh_image, cmap="gray")
+    return thresh_image
 
 def apply_adaptive_threshold(gray_img, **kwargs):
     """Takes grayscale image, returns thresholded version."""
@@ -90,8 +109,13 @@ def apply_roi_threshold(image, visualize=True, **kwargs):
         
     return image
 
-def apply_filter(image, kernel):
-    return cv2.filter2D(image, ddepth=-1, kernel=kernel)
+def apply_filter(image, kernel, visualize=True):
+    print("Applying filter:")
+    print(kernel)
+    image = cv2.filter2D(image, ddepth=-1, kernel=kernel)
+    if visualize:
+        utils.show_image(image, cmap="gray")
+    return image
 
 def apply_avg_blur(image, visualize=True, **kwargs):
     print("Applying average blur with args:", kwargs)
@@ -154,7 +178,7 @@ def apply_scharrh(image, visualize=True, **kwargs):
     image = np.absolute(image) # Take absolute value to make it unsigned
     image = np.uint8(image)    # Convert dtype back to uint8
     if visualize:
-        utils.show_image(image, cmap=plt.cm.gray)
+        utils.show_image(image, cmap="gray")
     return image
 
 def apply_scharrv(image, visualize=True, **kwargs):
@@ -163,35 +187,35 @@ def apply_scharrv(image, visualize=True, **kwargs):
     image = np.absolute(image) # Take absolute value to make it unsigned
     image = np.uint8(image)    # Convert dtype back to uint8
     if visualize:
-        utils.show_image(image, cmap=plt.cm.gray)
+        utils.show_image(image, cmap="gray")
     return image
 
 def apply_prewitth(image, visualize=True, **kwargs):
     print("Applying Prewitt filter for horizontal edges (along x-axis) with args:", kwargs)
     image = filters.prewitt_h(image)
     if visualize:
-        utils.show_image(image, cmap=plt.cm.gray)
+        utils.show_image(image, cmap="gray")
     return image
 
 def apply_prewittv(image, visualize=True, **kwargs):
     print("Applying Prewitt filter for vertical edges (along y-axis) with args:", kwargs)
     image = filters.prewitt_v(image)
     if visualize:
-        utils.show_image(image, cmap=plt.cm.gray)
+        utils.show_image(image, cmap="gray")
     return image
 
 def apply_farid(image, visualize=True, **kwargs):
     print("Applying Farid filter with args:", kwargs)
     image = filters.farid(image)
     if visualize:
-        utils.show_image(image, cmap=plt.cm.gray)
+        utils.show_image(image, cmap="gray")
     return image
 
 def apply_faridh(image, visualize=True, **kwargs):
     print("Applying Farid filter for horizontal edges (along x-axis) with args:", kwargs)
     image = filters.farid_h(image)
     if visualize:
-        utils.show_image(image, cmap=plt.cm.gray)
+        utils.show_image(image, cmap="gray")
     return image
 
 def apply_faridv(image, visualize=True, **kwargs):
@@ -216,6 +240,46 @@ def apply_canny(image, visualize=True, **kwargs):
         utils.show_image(image, cmap="gray")
     return image
 
+def apply_shi_tomasi(gray_image, visualize=True, **kwargs):
+    corners = cv2.goodFeaturesToTrack(gray_image, **kwargs) # maxCorners=49, qualityLevel=0.1, minDistance=20
+    corners = cv2.cornerSubPix(gray_image, corners, winSize=(11, 11), zeroZone=(-1, -1), criteria=(cv2.TERM_CRITERIA_MAX_ITER | cv2.TERM_CRITERIA_EPS, 20, 0.01))
+    corners = np.squeeze(corners, axis=1) # (N, 1, 2) -> (N, 2)
+    corners[:, [0,1]] = corners[:, [1,0]] # (x, y) -> (row/y, col/x)
+    if visualize:
+        utils.show_corners(gray_image, corners)
+    return corners
+
+def apply_dsift(gray_image, visualize=True, top_n=100, **kwargs):
+    corners, descr = dsift(gray_image, **kwargs)
+    descr_norm = np.linalg.norm(descr, ord=2, axis=1)
+    top_corners = np.argsort(descr_norm)[-top_n:]
+    corners = corners[top_corners]
+    if visualize:
+        utils.show_corners(gray_image, corners)
+    return corners
+
+def apply_sift(gray_image, visualize=True, **kwargs):
+    corners, descr = sift(gray_image, compute_descriptor=True, **kwargs)
+    # TODO: Enhance
+    # descr_norm = np.linalg.norm(descr, ord=2, axis=1)
+    # top_corners = np.argsort(descr_norm)[-top_n:]
+    # corners = corners[top_corners]
+    if visualize:
+        utils.show_corners(gray_image, corners)
+    return corners
+
+def apply_convex_hull(points, shape, visualize=True, **kwargs):
+    """Given a point set, return the vertices of convex polygon contanining it."""
+    points[:,[0,1]] = points[:,[1,0]]       # (row/y, col/x) -> (x, y)
+    vertices = cv2.convexHull(points)
+    vertices = np.squeeze(vertices, axis=1) # (N, 1, 2) -> (N, 2)
+    vertices[:, [0,1]] = vertices[:, [1,0]] # (x, y) -> (y/row, x/col)
+
+    if visualize:
+        utils.show_shapes(np.zeros(shape, dtype=np.uint8), [np.rint(vertices).astype(np.int32)], cmap="gray")
+
+    return vertices
+
 def apply_contour(bin_image, visualize=True, **kwargs):
     """
     Takes binary image (obtained with Canny or thresholding) to find contours (which separate white region from black background).
@@ -225,9 +289,12 @@ def apply_contour(bin_image, visualize=True, **kwargs):
     """
     print("Applying contours with args:", kwargs)
     _bin_image, contours, _hierarchy = cv2.findContours(bin_image, mode=cv2.RETR_TREE, method=cv2.CHAIN_APPROX_SIMPLE)
+    for i in range(len(contours)):
+        contours[i] = np.squeeze(contours[i], axis=1) # (N, 1, 2) -> (N, 2)
+        contours[i] = contours[i][:, [1,0]] # (x, y) -> (y/row, x/col)
     
     if visualize:
-        utils.show_shapes(np.zeros_like(image), contours, shapeIdx=-1, cmap="gray")
+        utils.show_shapes(np.zeros_like(bin_image), contours, shapeIdx=-1, cmap="gray")
     
     return contours
 
@@ -334,6 +401,9 @@ preproc_funcs = {
 detect_funcs = {
     "Canny Edges": apply_canny,
     "Contour": apply_contour,
+    "Shi Tomasi": apply_shi_tomasi,
+    "Dense SIFT": apply_dsift,
+    "SIFT": apply_sift,
     "Hough Line": apply_hough_line,
 }
 

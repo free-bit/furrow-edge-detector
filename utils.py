@@ -85,10 +85,10 @@ def compute_line_pixels(shape, rho, theta):
     
     return pixel_coords
 
-def convert_coord2mask(shape, line_pixel_coords):
-    """Convert line coordinates of a single line into a binary mask"""
+def convert_coord2mask(shape, pixel_coords):
+    """Convert pixel coordinates of a shape into a binary mask"""
     mask = np.zeros(shape, dtype=np.uint8)
-    mask[line_pixel_coords[:, 0], line_pixel_coords[:, 1]] = 255
+    mask[pixel_coords[:, 0], pixel_coords[:, 1]] = 255
     return mask
 
 def set_roi(image, num_corners=5):
@@ -153,7 +153,13 @@ def show_shapes(image, shapes2pixels, shapeIdx='all', cmap=None):
 
     image = cv2.drawContours(image, shapes2pixels_cv, contourIdx=shapeIdx, color=white, thickness=1)
     show_image(image, cmap=cmap)
-    
+
+def show_corners(image, corners, h=10, w=10, cmap="gray"):
+    plt.figure(figsize=(w,h))
+    plt.imshow(image, cmap="gray")
+    plt.scatter(corners[:, 1], corners[:, 0], color="red", marker="x")
+    plt.show()
+
 def show_overlay(image, mask):
     """Overlay a binary mask on top of RGB image"""
     overlaid = image.copy()
