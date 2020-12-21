@@ -27,6 +27,34 @@ def enhance_contrast(image, visualize=True, **kwargs): # **kwargs is ignored
         utils.show_image(image, cmap="gray")
     return image
 
+def apply_dilation(image, visualize=True, **kwargs):
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, ksize=(kwargs['ksize'], kwargs['ksize']))
+    dilated = cv2.dilate(image, kernel, iterations=1)
+    if visualize:
+        utils.show_image(dilated, cmap="gray")
+    return dilated
+
+def apply_erosion(image, visualize=True, **kwargs):
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, ksize=(kwargs['ksize'], kwargs['ksize']))
+    eroded = cv2.erode(image, kernel, iterations=1)
+    if visualize:
+        utils.show_image(eroded, cmap="gray")
+    return eroded
+
+def apply_opening(image, visualize=True, **kwargs):
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, ksize=(kwargs['ksize'], kwargs['ksize']))
+    opened = cv2.morphologyEx(image, cv2.MORPH_OPEN, kernel)
+    if visualize:
+        utils.show_image(opened, cmap="gray")
+    return opened
+
+def apply_closing(image, visualize=True, **kwargs):
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, ksize=(kwargs['ksize'], kwargs['ksize']))
+    closed = cv2.morphologyEx(image, cv2.MORPH_CLOSE, kernel)
+    if visualize:
+        utils.show_image(closed, cmap="gray")
+    return closed
+
 def apply_threshold(gray_img, visualize=True, **kwargs):
     """Takes grayscale image, returns thresholded version."""
     print("Applying standard threshold with args:", kwargs)
@@ -110,6 +138,10 @@ def apply_roi_threshold(image, visualize=True, **kwargs):
     return image
 
 def apply_filter(image, kernel, visualize=True):
+    """
+    The function does actually compute correlation, not the convolution. 
+    The kernel is not mirrored around the anchor point. If you need a real convolution, flip the kernel
+    """
     print("Applying filter:")
     print(kernel)
     image = cv2.filter2D(image, ddepth=-1, kernel=kernel)
@@ -241,6 +273,7 @@ def apply_canny(image, visualize=True, **kwargs):
     return image
 
 def apply_shi_tomasi(gray_image, visualize=True, **kwargs):
+    print("Applying Shi-Tomasi with args:", kwargs)
     corners = cv2.goodFeaturesToTrack(gray_image, **kwargs) # maxCorners=49, qualityLevel=0.1, minDistance=20
     corners = cv2.cornerSubPix(gray_image, corners, winSize=(11, 11), zeroZone=(-1, -1), criteria=(cv2.TERM_CRITERIA_MAX_ITER | cv2.TERM_CRITERIA_EPS, 20, 0.01))
     corners = np.squeeze(corners, axis=1) # (N, 1, 2) -> (N, 2)
@@ -250,6 +283,7 @@ def apply_shi_tomasi(gray_image, visualize=True, **kwargs):
     return corners
 
 def apply_dsift(gray_image, visualize=True, top_n=100, **kwargs):
+    print("Applying dense SIFT with args:", kwargs)
     corners, descr = dsift(gray_image, **kwargs)
     descr_norm = np.linalg.norm(descr, ord=2, axis=1)
     top_corners = np.argsort(descr_norm)[-top_n:]
@@ -259,13 +293,23 @@ def apply_dsift(gray_image, visualize=True, top_n=100, **kwargs):
     return corners
 
 def apply_sift(gray_image, visualize=True, **kwargs):
+    print("Applying SIFT with args:", kwargs)
     corners, descr = sift(gray_image, compute_descriptor=True, **kwargs)
     # TODO: Enhance
     # descr_norm = np.linalg.norm(descr, ord=2, axis=1)
     # top_corners = np.argsort(descr_norm)[-top_n:]
     # corners = corners[top_corners]
     if visualize:
-        utils.show_corners(gray_image, corners)
+        kp = []
+        for corner in corners:
+            y, x, r, theta = corner
+            kp.append(cv2.KeyPoint(x, y, r, theta))
+        fig = np.zeros_like(gray_image)
+        fig = cv2.drawKeypoints(gray_image, kp, fig)
+        plt.figure(figsize=(10,10))
+        plt.imshow(fig, cmap="gray")
+        plt.show()
+        # utils.show_corners(gray_image, corners)
     return corners
 
 def apply_convex_hull(points, shape, visualize=True, **kwargs):
@@ -385,6 +429,10 @@ def apply_hough_line(bin_image, visualize=True, print_lines=20, plot_hough_space
 preproc_funcs = {
     "Grayscale": convert_grayscale,
     "Contrast": enhance_contrast,
+    "Dilation": apply_dilation,
+    "Erosion": apply_erosion,
+    "Opening": apply_opening,
+    "Closing": apply_closing,
     "Threshold": apply_threshold,
     "Adaptive Threshold": apply_adaptive_threshold,
     "Spatial Threshold": apply_spatial_threshold,
