@@ -62,8 +62,31 @@ def pop(stack, log):
     if len(stack) > 0:
         stack.pop()
     update_log(log, stack)
+
+def compute_line_pixels_sym_eqn(shape, corners):
+    # Huber Regressor for robust line estimation (TODO: Make it even more robust)
+    cv_corners = corners[:, :, [1,0]] # (row/y, col/x) -> (x, y)
+    v0, v1, x0, y0 = cv2.fitLine(cv_corners, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
+    sym_eqn = lambda y: (y - y0) * v0 / v1 + x0
+    p1 = 0, sym_eqn(0)
+    p2 = shape[0], sym_eqn(shape[0])
+
+    pixel_coords = line(*np.rint(p1).astype(np.int32), *np.rint(p2).astype(np.int32))
+    
+    # Merge coordinates in a matrix
+    pixel_coords = np.stack(pixel_coords, axis=1)
+    
+    # Take coordinates in the 1st quadrant
+    pixel_coords = pixel_coords[np.min(pixel_coords, axis=1)>=0]
+    
+    # Take coordinates in the visible region
+    visible = (pixel_coords[:,0] < shape[0]) & (pixel_coords[:,1] < shape[1])
+    pixel_coords = pixel_coords[visible]
+    
+    return pixel_coords
+
                 
-def compute_line_pixels(shape, rho, theta):
+def compute_line_pixels_hough(shape, rho, theta):
     # theta in radians
     top = 0
     bottom = shape[0] - 1
@@ -171,7 +194,8 @@ def show_corners(image, corners, h=10, w=10, cmap="gray"):
 def show_overlay(image, mask):
     """Overlay a binary mask on top of RGB image"""
     overlaid = image.copy()
-    overlaid[mask == 255] = 0
+    color = (255, 0, 0) if len(image.shape) == 3 else 255
+    overlaid[mask == 255] = color
     show_image(overlaid)
 
 def show_image_pairs(left, right, h=15, w=15):

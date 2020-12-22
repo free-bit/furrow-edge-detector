@@ -416,7 +416,7 @@ def apply_hough_line(bin_image, visualize=True, print_lines=20, plot_hough_space
     # Compute pixel coordinates for each line
     line_list = []
     for vote, theta, rho in peak_params:
-        pixel_coords = utils.compute_line_pixels(bin_image.shape, rho, theta)
+        pixel_coords = utils.compute_line_pixels_hough(bin_image.shape, rho, theta)
         line_list.append(pixel_coords)
     
     # Visualize binary mask for all lines found
@@ -432,27 +432,29 @@ def apply_template_matching(depth_arr,
                             step=0.01,
                             n_contours=50,
                             corners_per_contour=1,
-                            visualize=False):
+                            verbose=0):
     params = locals()
     filtered = {}
     for k, v in params.items(): 
         if k not in ("depth_arr", "template"):
             filtered[k] = v
     print("Applying template matching with args:", filtered)
-    # show_image(template, cmap="gray")
+    if verbose == 2:
+        utils.show_image(template, cmap="gray")
     
-    w, h = template.shape[::-1]
+    h, w = template.shape
 
     # Extract binary masks for contours
     contour_masks = []
     for i in range(n_contours):
         min_depth = start_depth + (step * i)
         max_depth = min_depth + width
-        # print(f"Contour-{i}: ({min_depth:.2f}-{max_depth:.2f})")
+        if verbose == 2:
+            print(f"Contour-{i}: ({min_depth:.2f}-{max_depth:.2f})")
         contour_mask = (depth_arr >= min_depth) & (depth_arr <= max_depth)
         contour_masks.append(contour_mask)
 
-    if visualize:
+    if verbose == 1:
         combined_mask = np.bitwise_or.reduce(np.array(contour_masks), axis=0)
         utils.show_image(combined_mask, cmap="gray")
     
@@ -467,7 +469,7 @@ def apply_template_matching(depth_arr,
         detections.append(corners)
         
         # Visualize score map and detected points
-        if visualize:
+        if verbose == 2:
             plt.figure(figsize=(15,15))
             
             # Show score map from template matching
@@ -486,8 +488,10 @@ def apply_template_matching(depth_arr,
             
             plt.imshow(contour_image, cmap = 'gray')
             plt.show()
-            
-    return np.array(detections)
+    
+    detections = np.array(detections)
+    line_pixels = utils.compute_line_pixels_sym_eqn(depth_arr.shape, detections)
+    return line_pixels, detections
 
 # Binding names to actual methods:
 preproc_funcs = {
