@@ -425,6 +425,70 @@ def apply_hough_line(bin_image, visualize=True, print_lines=20, plot_hough_space
         
     return line_list
 
+def apply_template_matching(depth_arr,
+                            template,
+                            start_depth=0.8,
+                            width=0.02,
+                            step=0.01,
+                            n_contours=50,
+                            corners_per_contour=1,
+                            visualize=False):
+    params = locals()
+    filtered = {}
+    for k, v in params.items(): 
+        if k not in ("depth_arr", "template"):
+            filtered[k] = v
+    print("Applying template matching with args:", filtered)
+    # show_image(template, cmap="gray")
+    
+    w, h = template.shape[::-1]
+
+    # Extract binary masks for contours
+    contour_masks = []
+    for i in range(n_contours):
+        min_depth = start_depth + (step * i)
+        max_depth = min_depth + width
+        # print(f"Contour-{i}: ({min_depth:.2f}-{max_depth:.2f})")
+        contour_mask = (depth_arr >= min_depth) & (depth_arr <= max_depth)
+        contour_masks.append(contour_mask)
+
+    if visualize:
+        combined_mask = np.bitwise_or.reduce(np.array(contour_masks), axis=0)
+        utils.show_image(combined_mask, cmap="gray")
+    
+    # Perform detection
+    detections = []
+    for contour_mask in contour_masks:
+        contour_image = contour_mask.astype(np.float32)
+        scores = cv2.matchTemplate(contour_image, template, cv2.TM_CCOEFF_NORMED)
+        corners = utils.top_n_idxs(scores, corners_per_contour)
+        # Take the center of patch as corner location instead of top-left vertex
+        corners += np.rint([[h/2, w/2]]).astype(np.int64) # 1x2 array to be broadcasted to Nx2
+        detections.append(corners)
+        
+        # Visualize score map and detected points
+        if visualize:
+            plt.figure(figsize=(15,15))
+            
+            # Show score map from template matching
+            plt.subplot(121)
+            plt.imshow(scores, cmap = 'gray')
+            plt.title('Score Map')
+            
+            # Draw bounding box and center points for detections
+            plt.subplot(122)
+            plt.title('Detected Point(s)')
+            ax = plt.gca()
+            for y, x in corners:
+                plt.scatter(x, y, color="red", marker="x")
+                rect = plt.Rectangle([x-w/2, y-h/2], width=w, height=h, fill=False, ec="blue")
+                ax.add_patch(rect)
+            
+            plt.imshow(contour_image, cmap = 'gray')
+            plt.show()
+            
+    return np.array(detections)
+
 # Binding names to actual methods:
 preproc_funcs = {
     "Grayscale": convert_grayscale,

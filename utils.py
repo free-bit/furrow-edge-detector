@@ -6,10 +6,18 @@ import json
 import cv2
 from matplotlib import pyplot as plt
 import numpy as np
+import pandas as pd 
 from pprint import pprint
 from skimage.draw import line
 
 import image_processing
+
+def top_n_idxs(arr, n):
+    """Find top N elements in D dimensional array and returns indices (NxD)"""
+    flat_arr = np.ravel(arr)
+    flat_top_idxs = np.argsort(flat_arr)[-n:]
+    top_idxs = np.unravel_index(flat_top_idxs, arr.shape)
+    return np.array(list(zip(*top_idxs)))
 
 def save_config(filename, func_stack, config_stack):
     if not filename.endswith(".json"):
@@ -173,3 +181,8 @@ def show_image_pairs(left, right, h=15, w=15):
     ax[0].imshow(left)
     ax[1].imshow(right)
     plt.show()
+
+def print_full(arr, outfile="temp.csv"):
+    header = list(map(str, np.arange(1, arr.shape[1] + 1, 1)))
+    print(list(header))
+    pd.DataFrame(arr).to_csv(outfile, header=header, index=False, index_label=True)
