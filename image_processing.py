@@ -432,29 +432,57 @@ def apply_template_matching(depth_arr,
                             step=0.01,
                             n_contours=50,
                             corners_per_contour=1,
+                            roi=[None,None,None,None],
                             verbose=0):
     params = locals()
+
+    assert n_contours >= 2,\
+        "n_contours({}) cannot be less than 2".format(n_contours)
+
+    min_y, max_y, min_x, max_x = roi
+    if min_y is not None:
+        assert min_y >= 0,\
+            "min_y({}) has to be non-negative.".format(min_y)
+        if max_y is not None:
+            assert max_y >= min_y,\
+            "min_y({}) cannot be greater than max_y({})".format(min_y, max_y)
+    else:
+        min_y = 0
+    
+    if min_x is not None:
+        assert min_x >= 0,\
+            "min_x({}) has to be non-negative.".format(min_x)
+        if max_x is not None:
+            assert max_x >= min_x,\
+            "min_x({}) cannot be greater than max_x({})".format(min_x, max_x)
+    else:
+        min_x = 0
+
+    roi_arr = depth_arr[min_y:max_y, min_x:max_x]
+    h, w = template.shape
+
+    # Print current arguments
     filtered = {}
     for k, v in params.items(): 
         if k not in ("depth_arr", "template"):
             filtered[k] = v
     print("Applying template matching with args:", filtered)
-    if verbose == 2:
+    if verbose >= 1:
+        print("[Info]: Template shape:", template.shape)
         utils.show_image(template, cmap="gray")
-    
-    h, w = template.shape
 
     # Extract binary masks for contours
     contour_masks = []
     for i in range(n_contours):
         min_depth = start_depth + (step * i)
         max_depth = min_depth + width
-        if verbose == 2:
+        if verbose >= 2:
             print(f"Contour-{i}: ({min_depth:.2f}-{max_depth:.2f})")
-        contour_mask = (depth_arr >= min_depth) & (depth_arr <= max_depth)
+        contour_mask = (roi_arr >= min_depth) & (roi_arr <= max_depth)
         contour_masks.append(contour_mask)
 
-    if verbose == 1:
+    if verbose >= 1:
+        print("[Info]: ROI with shape {} defined by y: {}, x: {}".format(roi_arr.shape, (min_y, max_y), (min_x, max_x)))
         combined_mask = np.bitwise_or.reduce(np.array(contour_masks), axis=0)
         utils.show_image(combined_mask, cmap="gray")
     
@@ -465,11 +493,11 @@ def apply_template_matching(depth_arr,
         scores = cv2.matchTemplate(contour_image, template, cv2.TM_CCOEFF_NORMED)
         corners = utils.top_n_idxs(scores, corners_per_contour)
         # Take the center of patch as corner location instead of top-left vertex
-        corners += np.rint([[h/2, w/2]]).astype(np.int64) # 1x2 array to be broadcasted to Nx2
+        corners += np.rint([[min_y+h/2, min_x+w/2]]).astype(np.int64) # 1x2 array to be broadcasted to Nx2
         detections.append(corners)
         
         # Visualize score map and detected points
-        if verbose == 2:
+        if verbose >= 2:
             plt.figure(figsize=(15,15))
             
             # Show score map from template matching
@@ -482,8 +510,8 @@ def apply_template_matching(depth_arr,
             plt.title('Detected Point(s)')
             ax = plt.gca()
             for y, x in corners:
-                plt.scatter(x, y, color="red", marker="x")
-                rect = plt.Rectangle([x-w/2, y-h/2], width=w, height=h, fill=False, ec="blue")
+                plt.scatter(x-min_x, y-min_y, color="red", marker="x")
+                rect = plt.Rectangle([x-w/2-min_x, y-h/2-min_y], width=w, height=h, fill=False, ec="blue")
                 ax.add_patch(rect)
             
             plt.imshow(contour_image, cmap = 'gray')
