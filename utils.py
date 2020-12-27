@@ -8,14 +8,17 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd 
 from pprint import pprint
+from scipy.cluster.hierarchy import dendrogram
 from skimage.draw import line
+from sklearn.cluster import AgglomerativeClustering
 
 import image_processing
 
 def top_n_idxs(arr, n):
     """Find top N elements in D dimensional array and returns indices (NxD)"""
     flat_arr = np.ravel(arr)
-    flat_top_idxs = np.argsort(flat_arr)[-n:]
+    # np.argsort sorts in ascending order, take last n elements in reverse order
+    flat_top_idxs = np.argsort(flat_arr)[-1:-(n+1):-1]
     top_idxs = np.unravel_index(flat_top_idxs, arr.shape)
     return np.array(list(zip(*top_idxs)))
 
@@ -205,6 +208,77 @@ def show_image_pairs(left, right, h=15, w=15):
     ax[0].imshow(left)
     ax[1].imshow(right)
     plt.show()
+
+def show_dendrogram(model, **kwargs):
+    # Create linkage matrix and then plot the dendrogram
+    
+    plt.title('Hierarchical Clustering Dendrogram')
+    
+    # Create the counts of samples under each node
+    counts = np.zeros(model.children_.shape[0])
+    n_samples = len(model.labels_)
+    for i, merge in enumerate(model.children_):
+        current_count = 0
+        for child_idx in merge:
+            if child_idx < n_samples:
+                current_count += 1  # leaf node
+            else:
+                current_count += counts[child_idx - n_samples]
+        counts[i] = current_count
+
+    linkage_matrix = np.column_stack([model.children_, model.distances_,
+                                      counts]).astype(float)
+
+    # Plot the corresponding dendrogram
+    dendrogram(linkage_matrix, **kwargs)
+    plt.xlabel("Number of points in node (or index of point if no parenthesis).")
+    plt.show()
+
+def cluster_horizontally(corners, n_clusters=None, distance_threshold=100, linkage="average", verbose=0):
+    if len(corners.shape) == 3:
+        corners = corners.reshape(-1, 2)
+    _, x = np.hsplit(corners, 2)
+
+    model = AgglomerativeClustering(n_clusters=n_clusters, distance_threshold=distance_threshold, linkage=linkage)
+    label_per_item = model.fit_predict(x)
+    
+    n_clusters = model.n_clusters_
+    print("[Info]: Number of estimated clusters : %d" % n_clusters)
+    
+    labels, items_per_label = np.unique(label_per_item, return_counts=True)
+    inlier_label = np.argmax(items_per_label)
+    outlier_labels = np.delete(labels, inlier_label)
+    print("[Info]: Inlier count: {}".format(items_per_label[inlier_label]))
+    print("[Info]: Outlier count: {}".format(items_per_label[outlier_labels].sum()))
+    
+    inlier_idxs = (label_per_item == inlier_label)
+    inlier_corners = corners[inlier_idxs]
+    
+    if verbose >= 2:
+        outlier_idxs = ~inlier_idxs
+        outliers = corners[outlier_idxs]
+        plt.title('Inlier: [{}] vs Outliers: {}'.format(inlier_label, outlier_labels))
+        inlier_pts = plt.scatter(inlier_corners[:,1], inlier_corners[:,0])
+        outlier_pts = plt.scatter(outliers[:,1], outliers[:,0])
+        plt.legend((inlier_pts, outlier_pts), (f"inlier ([{inlier_label}])", "outlier ({})".format(outlier_labels)), loc=4)
+        plt.show()
+    
+    if verbose >= 4:
+        print("[Info]: Items per cluster:", items_per_label)
+        plots = []
+        for label in labels:
+            item_idxs = (label_per_item == label)
+            items = corners[item_idxs]
+            plot = plt.scatter(items[:,1], items[:,0])
+            plots.append(plot)
+        plt.legend(plots, labels, loc=4)
+        plt.show()
+
+    if verbose >= 3:
+        show_dendrogram(model, truncate_mode='level', p=3)
+    
+    return inlier_corners.reshape(-1, 1, 2)
+
 
 def print_full(arr, outfile="temp.csv"):
     header = list(map(str, np.arange(1, arr.shape[1] + 1, 1)))

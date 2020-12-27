@@ -433,6 +433,10 @@ def apply_template_matching(depth_arr,
                             n_contours=50,
                             corners_per_contour=1,
                             roi=[None,None,None,None],
+                            filter_outliers=True,
+                            n_clusters=None, 
+                            distance_threshold=200, 
+                            linkage="average",
                             verbose=0):
     params = locals()
 
@@ -476,7 +480,7 @@ def apply_template_matching(depth_arr,
     for i in range(n_contours):
         min_depth = start_depth + (step * i)
         max_depth = min_depth + width
-        if verbose >= 2:
+        if verbose >= 4:
             print(f"Contour-{i}: ({min_depth:.2f}-{max_depth:.2f})")
         contour_mask = (roi_arr >= min_depth) & (roi_arr <= max_depth)
         contour_masks.append(contour_mask)
@@ -497,7 +501,7 @@ def apply_template_matching(depth_arr,
         detections.append(corners)
         
         # Visualize score map and detected points
-        if verbose >= 2:
+        if verbose >= 4:
             plt.figure(figsize=(15,15))
             
             # Show score map from template matching
@@ -516,8 +520,13 @@ def apply_template_matching(depth_arr,
             
             plt.imshow(contour_image, cmap = 'gray')
             plt.show()
-    
+
     detections = np.array(detections)
+
+    # Filter outliers (if specified)
+    if filter_outliers:
+        detections = utils.cluster_horizontally(detections, n_clusters=n_clusters, distance_threshold=distance_threshold, linkage=linkage, verbose=verbose)
+
     line_pixels = utils.compute_line_pixels_sym_eqn(depth_arr.shape, detections)
     return line_pixels, detections
 
