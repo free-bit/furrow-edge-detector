@@ -9,6 +9,7 @@ from skimage import filters
 from skimage.transform import hough_line, hough_line_peaks
 from skimage.measure import find_contours
 from skimage.morphology import convex_hull_image
+from sklearn.linear_model import RANSACRegressor
 
 import utils
 
@@ -416,7 +417,8 @@ def apply_hough_line(bin_image, visualize=True, print_lines=20, plot_hough_space
     # Compute pixel coordinates for each line
     line_list = []
     for vote, theta, rho in peak_params:
-        pixel_coords = utils.compute_line_pixels_hough(bin_image.shape, rho, theta)
+        p = {"theta": theta, "rho": rho, "type": "hough"}
+        pixel_coords = utils.compute_line_pixels(bin_image.shape, p)
         line_list.append(pixel_coords)
     
     # Visualize binary mask for all lines found
@@ -435,9 +437,6 @@ def apply_template_matching(depth_arr,
                             corners_per_contour=1,
                             roi=[None,None,None,None],
                             filter_outliers=True,
-                            n_clusters=None, 
-                            distance_threshold=200, 
-                            linkage="average",
                             verbose=0):
     params = locals()
 
@@ -526,13 +525,31 @@ def apply_template_matching(depth_arr,
             plt.imshow(contour_image, cmap = 'gray')
             plt.show()
 
-    detections = np.array(detections)
+    detections = np.array(detections).reshape(-1, 2)
 
-    # Filter outliers (if specified)
+    # Filter outliers with RANSAC (if specified)
     if filter_outliers:
-        detections = utils.cluster_horizontally(detections, n_clusters=n_clusters, distance_threshold=distance_threshold, linkage=linkage, verbose=verbose)
+        num_detections = detections.shape[0]
+        model = RANSACRegressor(residual_threshold=10)
+        # Observe that variation is high along x axis. Use RANSAC to regress line as x = m * y + b.
+        model.fit(detections[:,0].reshape(-1, 1), detections[:,1].reshape(-1, 1)) # Column vector is required.
+        
+        inliers = model.inlier_mask_ # outliers = ~inliers (if needed)
+        detections = detections[inliers]
+        num_inliers = detections.shape[0]
+        print("[Info]: Inliers/All: {}/{}".format(num_inliers, num_detections))
+        
+        linear_model = model.estimator_
+        p = {"m": linear_model.coef_.item(), "b": linear_model.intercept_.item(), "type": "slope"}
+        line_pixels = utils.compute_line_pixels(depth_arr.shape, p)
 
-    line_pixels = utils.compute_line_pixels_sym_eqn(depth_arr.shape, detections)
+    # Use a linear regressor robust against outliers and fit a line. However, outliers are not filtered.
+    else:
+        cv_corners = detections[:, [1,0]] # (row/y, col/x) -> (x, y)
+        vp = cv2.fitLine(cv_corners, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
+        p = {"v": vp[0:2], "p": vp[2:4], "type": "symmetric"}
+        line_pixels = utils.compute_line_pixels(depth_arr.shape, p)
+
     return line_pixels, detections
 
 # Binding names to actual methods:
