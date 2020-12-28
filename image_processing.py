@@ -431,6 +431,7 @@ def apply_template_matching(depth_arr,
                             width=0.02,
                             step=0.01,
                             n_contours=50,
+                            score_thresh=None,
                             corners_per_contour=1,
                             roi=[None,None,None,None],
                             filter_outliers=True,
@@ -495,6 +496,10 @@ def apply_template_matching(depth_arr,
     for contour_mask in contour_masks:
         contour_image = contour_mask.astype(np.float32)
         scores = cv2.matchTemplate(contour_image, template, cv2.TM_CCOEFF_NORMED)
+        # Apply threshold on score map (if specified)
+        if score_thresh:
+            scores[scores < score_thresh] = 0
+        # Take top n corners for this contour
         corners = utils.top_n_idxs(scores, corners_per_contour)
         # Take the center of patch as corner location instead of top-left vertex
         corners += np.rint([[min_y+h/2, min_x+w/2]]).astype(np.int64) # 1x2 array to be broadcasted to Nx2
