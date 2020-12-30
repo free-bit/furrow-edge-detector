@@ -66,6 +66,17 @@ def pop(stack, log):
         stack.pop()
     update_log(log, stack)
 
+def estimate_dy(depth0, ddepth, m=0.0027, b=0.06):
+    y0 = (1 / depth0 - b) / m
+    depth1 = depth0 + ddepth
+    y1 = (1 / depth1 - b) / m
+    return abs(y1-y0)
+
+def estimate_ddepth(depth0, dy, m=0.0027, b=0.06):
+    y0 = (1 / depth0 - b) / m
+    y1 = y0 - dy
+    depth1 = 1 / (m * y1 + b)
+    return abs(depth1-depth0)
 
 def line_endpoints(shape, p):
     """Given a line parametrized by 'p', returns coordinates for endpoints for the visible line segment (x0,y0), (x1,y1)."""
