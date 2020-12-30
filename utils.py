@@ -14,13 +14,18 @@ from sklearn.cluster import AgglomerativeClustering
 
 import image_processing
 
-def top_n_idxs(arr, n):
-    """Find top N elements in D dimensional array and returns indices (NxD)"""
+def topk(arr, k, largest=True):
+    """Find top k elements in D dimensional array and returns values (k,) and indices (kxD)"""
+    assert k > 0, "k({}) has to be positive.".format(k)
     flat_arr = np.ravel(arr)
     # np.argsort sorts in ascending order, take last n elements in reverse order
-    flat_top_idxs = np.argsort(flat_arr)[-1:-(n+1):-1]
+    topk = np.arange(k)
+    if largest:
+        topk = -(topk + 1)
+    flat_top_idxs = np.argsort(flat_arr)[topk]
     top_idxs = np.unravel_index(flat_top_idxs, arr.shape)
-    return np.array(list(zip(*top_idxs)))
+    top_vals = arr[top_idxs]
+    return (top_vals, np.array(list(zip(*top_idxs))))
 
 def save_config(filename, func_stack, config_stack):
     if not filename.endswith(".json"):

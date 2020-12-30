@@ -429,9 +429,8 @@ def apply_hough_line(bin_image, visualize=True, print_lines=20, plot_hough_space
 
 def apply_template_matching(depth_arr,
                             template,
-                            start_depth=0.8,
-                            start_width=0.02,
-                            step=0.01,
+                            contour_width=23.8, # Given in y-scale
+                            y_step=50,          # Given in y-scale
                             n_contours=50,
                             corners_per_contour=1,
                             dynamic_width=True,
@@ -477,17 +476,28 @@ def apply_template_matching(depth_arr,
         utils.show_image(template, cmap="gray")
 
     # Extract binary masks for contours
+    row = depth_arr[-1]
+    min_depth = row[row>0].min()
+    row = depth_arr[0]
+    upper_limit = depth_arr.max()
+
     contour_masks = []
-    min_depth = start_depth
-    dy = utils.estimate_dy(start_depth, start_width) if dynamic_width else None
     for i in range(n_contours):
-        ddepth = utils.estimate_ddepth(min_depth, dy) if dynamic_width else start_width
+        ddepth = utils.estimate_ddepth(min_depth, contour_width)
         max_depth = min_depth + ddepth
+        
+        if max_depth > upper_limit:
+            print(f"[Warning]: Contour-{i} with depth {max_depth:.2f} is out-of-bounds. Stopping with {i+1} contours.")
+            break
+        
         if verbose >= 4:
             print(f"Contour-{i}: ({min_depth:.2f}-{max_depth:.2f})")
+        
         contour_mask = (roi_arr >= min_depth) & (roi_arr <= max_depth)
         contour_masks.append(contour_mask)
-        min_depth += step
+        
+        new_step = utils.estimate_ddepth(min_depth, y_step)
+        min_depth += new_step
 
     if verbose >= 1:
         print("[Info]: ROI with shape {} defined by y: {}, x: {}".format(roi_arr.shape, (min_y, max_y), (min_x, max_x)))
@@ -503,7 +513,7 @@ def apply_template_matching(depth_arr,
         if score_thresh:
             scores[scores < score_thresh] = 0
         # Take top n corners for this contour
-        corners = utils.top_n_idxs(scores, corners_per_contour)
+        top_scores, corners = utils.topk(scores, corners_per_contour)
         # Take the center of patch as corner location instead of top-left vertex
         corners += np.rint([[min_y+h/2, min_x+w/2]]).astype(np.int64) # 1x2 array to be broadcasted to Nx2
         detections.append(corners)
