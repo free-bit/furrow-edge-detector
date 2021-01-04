@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd 
 from pprint import pprint
 from scipy.cluster.hierarchy import dendrogram
-from skimage.draw import line
 from sklearn.cluster import AgglomerativeClustering
 
 import image_processing
@@ -83,53 +82,54 @@ def estimate_ddepth(depth0, dy, m=0.0027, b=0.06):
     depth1 = 1 / (m * y1 + b)
     return abs(depth1-depth0)
 
-def line_endpoints(shape, p):
-    """Given a line parametrized by 'p', returns coordinates for endpoints for the visible line segment (x0,y0), (x1,y1)."""
-    y_min, y_max = 0, shape[0] - 1
-    p1, p2 = None, None
+def parabola(y, a, b, c):
+    return (a * y**2) + (b * y) + c
+
+def apply_geometric_formula(size, p):
+    """Given a geometric shape parametrized by 'p', returns pixel coordinates."""
+    y_min, y_max = 0, size[0]
+    y = np.arange(y_min, y_max, 1)
+    x = None
 
     if p['type'] == "slope":
         m, b = p['m'], p['b']
-        p1 = (y_min, (m * y_min + b))
-        p2 = (y_max, (m * y_max + b))
+        x = m * y + b
 
     elif p['type'] == "symmetric":
         v0, v1 = p['v']
         x0, y0 = p['p']
-        p1 = (y_min, (y_min - y0) * v0 / v1 + x0)
-        p2 = (y_max, (y_max - y0) * v0 / v1 + x0)
+        x = (y - y0) * v0 / v1 + x0
 
     elif p['type'] == "hough":
         rho, theta = p['rho'], p['theta']
         if theta == np.pi/2:
-            x_min, x_max = 0, shape[1] - 1
-            p1 = np.array([rho, x_min])
-            p2 = np.array([rho, x_max])
+            x_min, x_max = 0, size[1]
+            y = np.ones(size[1], dtype=np.int64) * rho
+            x = np.arange(x_min, x_max, 1)
         else:
-            p1 = (y_min, (rho - y_min * np.sin(theta)) / np.cos(theta))
-            p2 = (y_max, (rho - y_max * np.sin(theta)) / np.cos(theta))
+            x = (rho - y * np.sin(theta)) / np.cos(theta)
+
+    elif p['type'] == "parabola":
+        a, b, c = p['a'], p['b'], p['c']
+        x = parabola(y, a, b, c)
 
     else:
         raise NotImplementedError
     
-    return p1, p2
+    x = x.astype(np.int64)
+    pixel_coords = np.stack((y,x), axis=1)
+    return pixel_coords
 
-def compute_line_pixels(shape, p):
-    """Given a line parametrized by 'p', returns coordinates for visible line pixels (Nx2)."""
-    # Compute visible endpoints of the line
-    p1, p2 = line_endpoints(shape, p)
-
+def compute_visible_pixels(size, p):
+    """Given a geometric shape parametrized by 'p', returns coordinates for visible line pixels (Nx2)."""
     # Compute pixels belonging to the line
-    pixel_coords = line(*np.rint(p1).astype(np.int32), *np.rint(p2).astype(np.int32))
-    
-    # Merge coordinates in a matrix
-    pixel_coords = np.stack(pixel_coords, axis=1)
+    pixel_coords = apply_geometric_formula(size, p)
     
     # Take coordinates in the 1st quadrant
     pixel_coords = pixel_coords[np.min(pixel_coords, axis=1)>=0]
     
     # Take coordinates in the visible region
-    visible = (pixel_coords[:,0] < shape[0]) & (pixel_coords[:,1] < shape[1])
+    visible = (pixel_coords[:,0] < size[0]) & (pixel_coords[:,1] < size[1])
     pixel_coords = pixel_coords[visible]
     
     return pixel_coords

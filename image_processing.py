@@ -5,6 +5,7 @@ import cv2
 from cyvlfeat.sift import sift, dsift, phow
 from matplotlib import pyplot as plt
 import numpy as np
+from scipy.optimize import curve_fit
 from skimage import filters
 from skimage.transform import hough_line, hough_line_peaks
 from skimage.measure import find_contours
@@ -432,11 +433,10 @@ def apply_template_matching(depth_arr,
                             contour_width=23.8, # Given in y-scale
                             y_step=50,          # Given in y-scale
                             n_contours=50,
-                            corners_per_contour=1,
                             dynamic_width=True,
                             score_thresh=None,
                             roi=[None,None,None,None],
-                            filter_outliers=True,
+                            fit_type="curve",
                             verbose=0):
     params = locals()
 
@@ -512,8 +512,8 @@ def apply_template_matching(depth_arr,
         # Apply threshold on score map (if specified)
         if score_thresh:
             scores[scores < score_thresh] = 0
-        # Take top n corners for this contour
-        top_scores, corners = utils.topk(scores, corners_per_contour)
+        # Take top corner for this contour
+        _top_scores, corners = utils.topk(scores, 1)
         # Take the center of patch as corner location instead of top-left vertex
         corners += np.rint([[min_y+h/2, min_x+w/2]]).astype(np.int64) # 1x2 array to be broadcasted to Nx2
         detections.append(corners)
@@ -541,29 +541,29 @@ def apply_template_matching(depth_arr,
 
     detections = np.array(detections).reshape(-1, 2)
 
-    # Filter outliers with RANSAC (if specified)
-    if filter_outliers:
-        num_detections = detections.shape[0]
-        model = RANSACRegressor(residual_threshold=10)
-        # Observe that variation is high along x axis. Use RANSAC to regress line as x = m * y + b.
-        model.fit(detections[:,0].reshape(-1, 1), detections[:,1].reshape(-1, 1)) # Column vector is required.
-        
-        inliers = model.inlier_mask_ # outliers = ~inliers (if needed)
-        detections = detections[inliers]
-        num_inliers = detections.shape[0]
-        print("[Info]: Inliers/All: {}/{}".format(num_inliers, num_detections))
-        
+    # Filter outliers with RANSAC
+    num_detections = detections.shape[0]
+    model = RANSACRegressor(residual_threshold=10)
+    # Observe that variation is high along x axis. Use RANSAC to regress line as x = m * y + b.
+    model.fit(detections[:,0].reshape(-1, 1), detections[:,1].reshape(-1, 1)) # Column vector is required.
+    
+    inliers = model.inlier_mask_ # outliers = ~inliers (if needed)
+    detections = detections[inliers]
+    num_inliers = detections.shape[0]
+    print("[Info]: Inliers/All: {}/{}".format(num_inliers, num_detections))
+    
+    if fit_type == "line":
         linear_model = model.estimator_
         p = {"m": linear_model.coef_.item(), "b": linear_model.intercept_.item(), "type": "slope"}
-        line_pixels = utils.compute_line_pixels(depth_arr.shape, p)
 
-    # Use a linear regressor robust against outliers and fit a line. However, outliers are not filtered.
+    elif fit_type == "curve":
+        popt, _pcov = curve_fit(utils.parabola, detections[:,0], detections[:,1])
+        p = {"a": popt[0], "b": popt[1], "c": popt[2], "type": "parabola"}
+    
     else:
-        cv_corners = detections[:, [1,0]] # (row/y, col/x) -> (x, y)
-        vp = cv2.fitLine(cv_corners, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
-        p = {"v": vp[0:2], "p": vp[2:4], "type": "symmetric"}
-        line_pixels = utils.compute_line_pixels(depth_arr.shape, p)
+        raise NotImplementedError
 
+    line_pixels = utils.compute_visible_pixels(depth_arr.shape, p)
     return line_pixels, detections
 
 # Binding names to actual methods:
