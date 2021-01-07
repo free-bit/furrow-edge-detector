@@ -318,6 +318,12 @@ def create_template(size, position=4):
         raise NotImplementedError
     return mask
 
+def generate_lane_pixels(left, right, pixel_offset=0, num_lane=15):
+    mid = np.rint((left + right) / 2).astype(np.int32)
+    mid = mid[pixel_offset:]
+    segments = np.array_split(mid, num_lane)
+    return np.concatenate(segments[::2], axis=0)
+
 def shift_pixels(depth_arr, pixel_coords, intrinsics, shift3D=[-0.25, 0, 0]):
     """
     Given a translation vector in 3D in meters, compute new pixel coordinates.
