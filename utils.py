@@ -85,6 +85,11 @@ def estimate_ddepth(depth0, dy, m=0.0027, b=0.06):
 def parabola(y, a, b, c):
     return (a * y**2) + (b * y) + c
 
+# def parabola(y, *coeff):
+#     pow = np.arange(len(coeff))[::-1]
+#     result = (coeff * y**pow).sum()
+#     return result
+
 def apply_geometric_formula(size, p):
     """Given a geometric shape parametrized by 'p', returns pixel coordinates."""
     y_min, y_max = 0, size[0]
@@ -116,7 +121,7 @@ def apply_geometric_formula(size, p):
     else:
         raise NotImplementedError
     
-    x = x.astype(np.int64)
+    x = np.rint(x).astype(np.int64)
     pixel_coords = np.stack((y,x), axis=1)
     return pixel_coords
 
@@ -212,7 +217,7 @@ def show_corners(image, corners, h=10, w=10, cmap="gray"):
 def show_overlay(image, mask):
     """Overlay a binary mask on top of RGB image"""
     overlaid = image.copy()
-    color = (255, 0, 0) if len(image.shape) == 3 else 255
+    color = (0, 0, 0) if len(image.shape) == 3 else 255
     overlaid[mask == 255] = color
     show_image(overlaid)
 
@@ -294,6 +299,63 @@ def cluster_horizontally(corners, n_clusters=None, distance_threshold=100, linka
     
     return inlier_corners.reshape(-1, 1, 2)
 
+def create_template(size, position=4):
+    """
+    [1 | 2]
+    -------
+    [3 | 4]
+    """
+    mask = np.zeros((size, size), dtype=np.float32)
+    if position == 1:
+        mask[:size//2,:size//2] = 1
+    elif position == 2:
+        mask[:size//2,size//2:] = 1
+    elif position == 3:
+        mask[size//2:,:size//2] = 1
+    elif position == 4:
+        mask[size//2:,size//2:] = 1
+    else:
+        raise NotImplementedError
+    return mask
+
+def shift_pixels(depth_arr, pixel_coords, intrinsics, shift3D=[-0.25, 0, 0]):
+    """
+    Given a translation vector in 3D in meters, compute new pixel coordinates.
+    Instead of doing a 3D translation followed by a projection (a),
+    translation vector is projected and projected vector is applied on 2D (b).
+    (a) 2D -> 3D translate -> 2D
+      1) X1 = (x1 - ppx) / fx * depth
+      2) fx * (X1 - 0.25) / depth + ppx
+      * 1 & 2 yields round(x1 - fx * 0.25 / depth)
+
+    (b) 3D -> 2D translate (projected)
+      1) dx = fx * 0.25 / depth
+      2) round(x1 - dx)
+    """
+    depths = depth_arr[pixel_coords[:,0], pixel_coords[:,1]]
+    dx, dy, dz = shift3D
+    fx, fy = intrinsics.fx, intrinsics.fy
+    depths += dz
+    dx = fx * dx / depths
+    dy = fy * dy / depths
+    shifted = np.rint(pixel_coords + np.c_[dy, dx]).astype(np.int32)
+    return shifted
+
+def project(cam_coords, intrinsics):
+    z = cam_coords[:, 2]
+    fx, fy = intrinsics.fx, intrinsics.fy
+    ppx, ppy = intrinsics.ppx, intrinsics.ppy
+    x = np.rint(cam_coords[:,0] * fx / z + ppx).astype(np.int32)
+    y = np.rint(cam_coords[:,1] * fy / z + ppy).astype(np.int32)
+    return np.c_[y, x]
+
+def backproject(depth_arr, pixel_coords, intrinsics):
+    z = depth_arr[pixel_coords[:,0], pixel_coords[:,1]]
+    fx, fy = intrinsics.fx, intrinsics.fy
+    ppx, ppy = intrinsics.ppx, intrinsics.ppy
+    x = (pixel_coords[:,1] - ppx) / fx * z
+    y = (pixel_coords[:,0] - ppy) / fy * z
+    return np.c_[x, y, z]
 
 def print_full(arr, outfile="temp.csv"):
     header = list(map(str, np.arange(1, arr.shape[1] + 1, 1)))

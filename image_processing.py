@@ -9,7 +9,7 @@ from scipy.optimize import curve_fit
 from skimage import filters
 from skimage.transform import hough_line, hough_line_peaks
 from skimage.measure import find_contours
-from skimage.morphology import convex_hull_image
+from skimage.morphology import convex_hull_image, skeletonize
 from sklearn.linear_model import RANSACRegressor
 
 import utils
@@ -56,6 +56,12 @@ def apply_closing(image, visualize=True, **kwargs):
     if visualize:
         utils.show_image(closed, cmap="gray")
     return closed
+
+def apply_skeletonization(image, visualize=True, **kwargs):
+    skeleton = skeletonize(image).astype(np.uint8)
+    if visualize:
+        utils.show_image(skeleton, cmap="gray")
+    return skeleton
 
 def apply_threshold(gray_img, visualize=True, **kwargs):
     """Takes grayscale image, returns thresholded version."""
@@ -419,7 +425,7 @@ def apply_hough_line(bin_image, visualize=True, print_lines=20, plot_hough_space
     line_list = []
     for vote, theta, rho in peak_params:
         p = {"theta": theta, "rho": rho, "type": "hough"}
-        pixel_coords = utils.compute_line_pixels(bin_image.shape, p)
+        pixel_coords = utils.compute_visible_pixels(bin_image.shape, p)
         line_list.append(pixel_coords)
     
     # Visualize binary mask for all lines found
@@ -434,6 +440,7 @@ def apply_template_matching(depth_arr,
                             y_step=50,          # Given in y-scale
                             n_contours=50,
                             dynamic_width=True,
+                            ransac_thresh=15,
                             score_thresh=None,
                             roi=[None,None,None,None],
                             fit_type="curve",
@@ -543,11 +550,13 @@ def apply_template_matching(depth_arr,
 
     # Filter outliers with RANSAC
     num_detections = detections.shape[0]
-    model = RANSACRegressor(residual_threshold=10)
+    model = RANSACRegressor(residual_threshold=ransac_thresh)
     # Observe that variation is high along x axis. Use RANSAC to regress line as x = m * y + b.
     model.fit(detections[:,0].reshape(-1, 1), detections[:,1].reshape(-1, 1)) # Column vector is required.
     
-    inliers = model.inlier_mask_ # outliers = ~inliers (if needed)
+    inliers = model.inlier_mask_
+    outliers = ~inliers
+    misdetections = detections[outliers]
     detections = detections[inliers]
     num_inliers = detections.shape[0]
     print("[Info]: Inliers/All: {}/{}".format(num_inliers, num_detections))
@@ -563,8 +572,8 @@ def apply_template_matching(depth_arr,
     else:
         raise NotImplementedError
 
-    line_pixels = utils.compute_visible_pixels(depth_arr.shape, p)
-    return line_pixels, detections
+    edge_pixels = utils.compute_visible_pixels(depth_arr.shape, p)
+    return edge_pixels, detections, misdetections
 
 # Binding names to actual methods:
 preproc_funcs = {
