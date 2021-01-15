@@ -43,6 +43,13 @@ def interrupt_handler(signum, frame):
         print("\nTerminating.")
     return
 
+def print_intrinsics(intrinsics):
+    print(f"H: {intrinsics.height}, W: {intrinsics.width}")
+    print(f"fx: {intrinsics.fx}, fy: {intrinsics.fy}")
+    print(f"Principle point in pixel coordinates: ({intrinsics.ppx}, {intrinsics.ppy})")
+    print(f"Model: {intrinsics.model}")
+    print(f"Coefficients: {intrinsics.coeffs}")
+
 # Handles command line arguments
 def arg_handler():
     parser = argparse.ArgumentParser(description='Extract information from rosbag files', 
@@ -107,13 +114,13 @@ def main():
         print("- {}: {}".format(k, v))
     print()
 
-    try:
-        os.mkdir(args["outputfolder"])
-    except FileExistsError:
-        answer = input("WARNING: {} exists. Would you like to continue anyway? [y/N]: ".format(args["outputfolder"]))
-        if answer.lower() != 'y':
-            print("Exited.")
-            exit(-1)
+    # try:
+    #     os.mkdir(args["outputfolder"])
+    # except FileExistsError:
+    #     answer = input("WARNING: {} exists. Would you like to continue anyway? [y/N]: ".format(args["outputfolder"]))
+    #     if answer.lower() != 'y':
+    #         print("Exited.")
+    #         exit(-1)
 
     # Setup:
     pipe = profile = None
@@ -130,14 +137,17 @@ def main():
         exit(-1)
 
     # Skip ns first frames to give the auto-exposure time to adjust
-    for i in range(args["nskip"]):
+    for i in range(1, args["nskip"]+1):
         print("Skipping frame:", i)
         pipe.wait_for_frames()
 
-    count = 0
+    count = 0 + args["nskip"]
+    max_count = args["nframes"] + args["nskip"]
+    first_frame_idx = 1 + args["nskip"]
     first_frame = previous_frame = None
     start_time = time()
-    while count < args["nframes"] and RUNNING:
+    colorizer = rs.colorizer()
+    while count < max_count and RUNNING:
         # Store next frameset for later processing:
         frameset = pipe.wait_for_frames()
         color_frame = frameset.get_color_frame()
@@ -156,7 +166,7 @@ def main():
         previous_frame = frame_number
 
         # Remember first frame
-        if count == 1:
+        if count == first_frame_idx:
             first_frame = frame_number
 
         # Print timestamp for current frame
@@ -165,11 +175,10 @@ def main():
         ## RGB Data
         color = np.asanyarray(color_frame.get_data())
         image = Image.fromarray(color)
-        image.save(os.path.join(args["outputfolder"], str(count) + "_rgb.png"))
+        # image.save(os.path.join(args["outputfolder"], str(count) + "_rgb.png"))
 
-        ## Depth Data
-        colorizer = rs.colorizer()
-        colorized_depth = np.asanyarray(colorizer.colorize(depth_frame).get_data())
+        ## (Unaligned) Depth Data
+        # colorized_depth = np.asanyarray(colorizer.colorize(depth_frame).get_data())
 
         ## Stream Alignment (depth to color)
 
@@ -184,18 +193,23 @@ def main():
         if args["depth"]:
             colorized_depth = np.asanyarray(colorizer.colorize(aligned_depth_frame).get_data())
             image = Image.fromarray(colorized_depth)
-            image.save(os.path.join(args["outputfolder"], str(count) + "_depth.png"))
+            # image.save(os.path.join(args["outputfolder"], str(count) + "_depth.png"))
 
         # Depth array
         depth_scale = profile.get_device().first_depth_sensor().get_depth_scale()
-        depth_arr = np.asanyarray(aligned_depth_frame.get_data()) # in meters
-        depth_arr = depth_arr * depth_scale
-        np.save(os.path.join(args["outputfolder"], str(count) + "_depth.npy"), depth_arr)
+        depth_arr = np.asanyarray(aligned_depth_frame.get_data())
+        depth_arr = depth_arr * depth_scale # Store depth in meters
+        # np.save(os.path.join(args["outputfolder"], str(count) + "_depth.npy"), depth_arr)
+
+        # depth_int1 = depth_frame.profile.as_video_stream_profile().get_intrinsics()
+        # depth_int2 = aligned_depth_frame.profile.as_video_stream_profile().get_intrinsics()
+        intrinsics = color_frame.profile.as_video_stream_profile().get_intrinsics()
+        print_intrinsics(intrinsics)
 
     # Cleanup at the end:
     pipe.stop()
     end_time = time()
-    print("{} frames extracted in {}s.".format(count, end_time-start_time))
+    print("{} frames extracted in {}s.".format(count - args["nskip"], end_time-start_time))
 
 if __name__ == "__main__":
     main()
