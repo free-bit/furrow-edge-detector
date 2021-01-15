@@ -43,13 +43,6 @@ def interrupt_handler(signum, frame):
         print("\nTerminating.")
     return
 
-def print_intrinsics(intrinsics):
-    print(f"H: {intrinsics.height}, W: {intrinsics.width}")
-    print(f"fx: {intrinsics.fx}, fy: {intrinsics.fy}")
-    print(f"Principle point in pixel coordinates: ({intrinsics.ppx}, {intrinsics.ppy})")
-    print(f"Model: {intrinsics.model}")
-    print(f"Coefficients: {intrinsics.coeffs}")
-
 # Handles command line arguments
 def arg_handler():
     parser = argparse.ArgumentParser(description='Extract information from rosbag files', 
@@ -68,8 +61,6 @@ def arg_handler():
                        type=check_frame_count,
                        metavar="NUM_FRAME",
                        default=1)
-
-    optional.add_argument("-d", "--depth", help="Save depth as PNG", default=False, action="store_true")
     
     optional.add_argument("-o", "--outputfolder", 
                        type=str,
@@ -89,20 +80,19 @@ def arg_handler():
 
     return args
 
-def stream_length(pipe):
-    frame = pipe.wait_for_frames()
-    first = previous = frame.get_frame_number()
-    timestamp = frame.get_timestamp()
-    count = 1
-    print("Frame: {}, Frame ID: {}, Capture Time: {}".format(count, first, timestamp))
-    while True:
-        frame = pipe.wait_for_frames()
-        current = frame.get_frame_number()
-        timestamp = frame.get_timestamp()
-        if current == first or current == previous:
-            return count
-        count += 1
-        print("Frame: {}, Frame ID: {}, Capture Time: {}".format(count, current, timestamp))
+def print_intrinsics(intrinsics):
+    print("Intrinsics:")
+    print(f"- H: {intrinsics.height}, W: {intrinsics.width}")
+    print(f"- fx: {intrinsics.fx}, fy: {intrinsics.fy}")
+    print(f"- Principle point in pixel coordinates: ({intrinsics.ppx}, {intrinsics.ppy})")
+    print(f"- Distortion Model: {intrinsics.model}")
+    print(f"- Coefficients: {intrinsics.coeffs}\n")
+
+def calculate_frame_count(timedelta, fps):
+    duration = timedelta.total_seconds() # datetime.timedelta -> float
+    frame_count = int(duration * fps)
+    print(f"Duration: {duration} secs, FPS: {fps}, Expected Number of Frames: ~{frame_count}\n")
+    return frame_count
 
 def main():
     signal.signal(signal.SIGINT, interrupt_handler)
@@ -114,6 +104,7 @@ def main():
         print("- {}: {}".format(k, v))
     print()
 
+    # Create directory (if not already exists)
     # try:
     #     os.mkdir(args["outputfolder"])
     # except FileExistsError:
@@ -123,51 +114,71 @@ def main():
     #         exit(-1)
 
     # Setup:
-    pipe = profile = None
+    first_frame = 0
+    pipe = pipe_profile = last_frame = None
     try:
         start_time = time()
-        pipe = rs.pipeline()
-        cfg = rs.config()
-        cfg.enable_device_from_file(args["file"])
-        profile = pipe.start(cfg)
+
+        # Initialization & rosbag reading
+        pipe = rs.pipeline() # The pipeline simplifies the user interaction with the device and computer vision processing modules.
+        cfg = rs.config()    # The config allows pipeline users to request filters for the pipeline streams and device selection and configuration.
+        cfg.enable_device_from_file(args["file"], repeat_playback=False) # Playback a file but do not loop over the file.
+        pipe_profile = pipe.start(cfg) # The pipeline profile includes a device and a selection of active streams, with specific profiles.
+        device = pipe_profile.get_device() # Includes color & depth sensors
+        color_stream = pipe_profile.get_stream(rs.stream.color) # Includes fps information
+        
+        # Get intrinsics
+        intrinsics = color_stream.as_video_stream_profile().intrinsics # Intrinsics can only be accessible via video_stream_profile.
+        print_intrinsics(intrinsics)
+        
+        # Get scale
+        depth_scale = device.first_depth_sensor().get_depth_scale()
+        print(f"Depth scale: {depth_scale:.3f} meters\n")
+        
+        # Disable real-time reading to prevent frame drops
+        playback = device.as_playback() # Cast device as playback object
+        playback.set_real_time(False)
+        timedelta = playback.get_duration()
+        fps = color_stream.fps()
+        last_frame = calculate_frame_count(timedelta, fps)
+        
         end_time = time()
-        print("Bag file is successfully read in {}s".format(end_time-start_time))
+
+        print(f"Bag file is successfully read in {end_time-start_time} secs\n")
+    
     except RuntimeError as e:
         print("ERROR:", e)
         exit(-1)
 
-    # Skip ns first frames to give the auto-exposure time to adjust
-    for i in range(1, args["nskip"]+1):
-        print("Skipping frame:", i)
-        pipe.wait_for_frames()
-
-    count = 0 + args["nskip"]
-    max_count = args["nframes"] + args["nskip"]
-    first_frame_idx = 1 + args["nskip"]
-    first_frame = previous_frame = None
+    count = 0 # + args["nskip"]
+    max_count = args["nframes"] # + args["nskip"]
     start_time = time()
-    colorizer = rs.colorizer()
-    while count < max_count and RUNNING:
+    align = rs.align(rs.stream.color) # Create alignment primitive with color as its target stream
+    frame_time_map = {}
+    filename = "{frame}.{ext}"
+    
+    # TODO: Use one of the followings later
+    # colorizer = rs.colorizer()       # Create colorizer primitive
+    # colorized_depth = np.asanyarray(colorizer.colorize(aligned_depth_frame).get_data())
+    # image = Image.fromarray(colorized_depth)
+    # depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
+    
+    while RUNNING:
         # Store next frameset for later processing:
-        frameset = pipe.wait_for_frames()
+        try:
+            frameset = pipe.wait_for_frames()
+        except RuntimeError:
+            break
+
+        count += 1
+
         color_frame = frameset.get_color_frame()
-        depth_frame = frameset.get_depth_frame()
+        # depth_frame = frameset.get_depth_frame() # (Unaligned) Depth Data
 
         # Extract metadata identifying the frame
         frame_number = frameset.get_frame_number()
-        frame_stamp = frameset.get_timestamp() # TODO: Save timestamp later
-
-        # Exit loop if stream restarts
-        if frame_number == first_frame or frame_number == previous_frame:
-            break
-
-        # Update loop parameters for the next iteration
-        count += 1
-        previous_frame = frame_number
-
-        # Remember first frame
-        if count == first_frame_idx:
-            first_frame = frame_number
+        frame_stamp = frameset.get_timestamp()
+        frame_time_map[frame_number] = frame_stamp
 
         # Print timestamp for current frame
         print("Frame: {}, Frame ID: {}, Capture Time: {}".format(count, frame_number, frame_stamp))
@@ -175,41 +186,25 @@ def main():
         ## RGB Data
         color = np.asanyarray(color_frame.get_data())
         image = Image.fromarray(color)
+        # filename.format(frame=frame_number, ext="png")
         # image.save(os.path.join(args["outputfolder"], str(count) + "_rgb.png"))
 
-        ## (Unaligned) Depth Data
-        # colorized_depth = np.asanyarray(colorizer.colorize(depth_frame).get_data())
+        # Stream Alignment (depth to color)
+        frameset = align.process(frameset) # Now the two images are pixel-perfect aligned and you can use depth data just like you would any of the other channels.
 
-        ## Stream Alignment (depth to color)
-
-        # Create alignment primitive with color as its target stream:
-        align = rs.align(rs.stream.color)
-        frameset = align.process(frameset)
-
-        # Update color and depth frames:
-        aligned_depth_frame = frameset.get_depth_frame() # Now the two images are pixel-perfect aligned and you can use depth data just like you would any of the other channels.
-
-        # Depth image
-        if args["depth"]:
-            colorized_depth = np.asanyarray(colorizer.colorize(aligned_depth_frame).get_data())
-            image = Image.fromarray(colorized_depth)
-            # image.save(os.path.join(args["outputfolder"], str(count) + "_depth.png"))
+        # Get aligned depth frame
+        aligned_depth_frame = frameset.get_depth_frame()
 
         # Depth array
-        depth_scale = profile.get_device().first_depth_sensor().get_depth_scale()
         depth_arr = np.asanyarray(aligned_depth_frame.get_data())
         depth_arr = depth_arr * depth_scale # Store depth in meters
+        # filename.format(frame=frame_number, ext="npy")
         # np.save(os.path.join(args["outputfolder"], str(count) + "_depth.npy"), depth_arr)
-
-        # depth_int1 = depth_frame.profile.as_video_stream_profile().get_intrinsics()
-        # depth_int2 = aligned_depth_frame.profile.as_video_stream_profile().get_intrinsics()
-        intrinsics = color_frame.profile.as_video_stream_profile().get_intrinsics()
-        print_intrinsics(intrinsics)
 
     # Cleanup at the end:
     pipe.stop()
     end_time = time()
-    print("{} frames extracted in {}s.".format(count - args["nskip"], end_time-start_time))
+    print("{} frames extracted in {} secs.".format(count - args["nskip"], end_time-start_time))
 
 if __name__ == "__main__":
     main()
