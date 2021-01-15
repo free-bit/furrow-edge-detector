@@ -2,6 +2,7 @@
 # coding: utf-8
 
 import argparse
+import json
 import os
 import signal
 import sys
@@ -13,26 +14,40 @@ import pyrealsense2 as rs # Intel RealSense cross-platform open-source API
 
 RUNNING = True
 
-def check_skip_count(value):
+def validate_args_early(args):
     try:
-        value = int(value)
-        assert (value >= 0), "Non-negative integer is expected but got: {}".format(value)
-    except Exception as e:
-        print("ERROR:", e)
-        exit(-1)
-    return value
+        args['first'] = int(args['first'])
+        assert args['first'] > 0, f"first({args['first']}) has to be positive"
+        
+        if "inf" in args['last']:
+            args['last'] = float(args['last'])
+        else:
+            args['last'] = int(args['last'])
 
-def check_frame_count(value):
-    if value.lower() == 'all':
-        value = np.inf
-    else:
-        try:
-            value = int(value)
-            assert (value > 0), "Positive integer is expected but got: {}".format(value)
-        except Exception as e:
-            print("ERROR:", e)
-            exit(-1)
-    return value
+        assert args['first'] <= args['last'], f"first({args['first']}) cannot be larger than last({args['last']})"
+        
+        args['step'] = int(args['step'])
+        
+        if "inf" in args['max']:
+            args['max'] = float(args['max'])
+        else:
+            args['max'] = int(args['max'])
+    
+    except Exception as e:
+        print("Error:", e)
+        exit(-1)
+
+def validate_args_late(args, frame_count):
+    try:
+        assert args['first'] <= frame_count, f"first({args['first']}) cannot be larger than max frames({frame_count}) in the input file"
+        
+        if args['last'] > frame_count:
+            # print(f"last({args['last']}) updated with frame count({frame_count})")
+            args['last'] = frame_count
+    
+    except Exception as e:
+        print("Error:", e)
+        exit(-1)
 
 def interrupt_handler(signum, frame):
     global RUNNING
@@ -41,28 +56,37 @@ def interrupt_handler(signum, frame):
         print("\nResuming execution.")
     else:
         print("\nTerminating.")
-    return
 
 # Handles command line arguments
 def arg_handler():
     parser = argparse.ArgumentParser(description='Extract information from rosbag files', 
                                      add_help=True)
     # Optional flags
-    optional = parser.add_argument_group(title='Optional arguments')
+    optional = parser._optionals
+    optional.title = 'Optional arguments'
+    optional._option_string_actions["-h"].help = "Show this help message and exit"
 
-    optional.add_argument("-ns", "--nskip",
-                       help="Specify the number of frames to be skipped from the beginning (default: 0)",
-                       type=check_skip_count,
-                       metavar="NUM_SKIP",
-                       default=0)
-
-    optional.add_argument("-nf", "--nframes",
-                       help="Specify the number of frames to be extracted (positive int or 'all', default: 1)",
-                       type=check_frame_count,
-                       metavar="NUM_FRAME",
+    optional.add_argument("--first",
+                       help="Specify the first frame number (default: 1)",
+                       metavar="FIRST",
                        default=1)
+
+    optional.add_argument("--last",
+                       help="Specify the last frame number (default: inf)",
+                       metavar="LAST",
+                       default="inf")
+
+    optional.add_argument("--step",
+                       help="Specify the increment at each iteration (default: 1)",
+                       metavar="STEP",
+                       default=1)
+
+    optional.add_argument("--max",
+                       help="Specify maximum frames to be extracted (default: inf)",
+                       metavar="MAX",
+                       default="inf")
     
-    optional.add_argument("-o", "--outputfolder", 
+    optional.add_argument("--out",
                        type=str,
                        help="Specify output folder name (default: './extracted')", 
                        metavar="FOLDER",
@@ -88,16 +112,18 @@ def print_intrinsics(intrinsics):
     print(f"- Distortion Model: {intrinsics.model}")
     print(f"- Coefficients: {intrinsics.coeffs}\n")
 
-def calculate_frame_count(timedelta, fps):
-    duration = timedelta.total_seconds() # datetime.timedelta -> float
-    frame_count = int(duration * fps)
-    print(f"Duration: {duration} secs, FPS: {fps}, Expected Number of Frames: ~{frame_count}\n")
+def calculate_frame_count(duration, fps):
+    seconds = duration.total_seconds() # duration: datetime.timedelta -> seconds: float
+    frame_count = round(seconds * fps)
+    print(f"Duration: {seconds} secs, FPS: {fps}, Expected Number of Frames: ~{frame_count}\n")
     return frame_count
 
 def main():
     signal.signal(signal.SIGINT, interrupt_handler)
 
     args = vars(arg_handler())
+
+    validate_args_early(args)
     
     print("\nFlags:")
     for k, v in args.items():
@@ -105,17 +131,16 @@ def main():
     print()
 
     # Create directory (if not already exists)
-    # try:
-    #     os.mkdir(args["outputfolder"])
-    # except FileExistsError:
-    #     answer = input("WARNING: {} exists. Would you like to continue anyway? [y/N]: ".format(args["outputfolder"]))
-    #     if answer.lower() != 'y':
-    #         print("Exited.")
-    #         exit(-1)
+    try:
+        os.mkdir(args["out"])
+    except FileExistsError:
+        answer = input("WARNING: {} exists. Would you like to continue anyway? [y/N]: ".format(args["out"]))
+        if answer.lower() != 'y':
+            print("Exited.")
+            exit(-1)
 
     # Setup:
-    first_frame = 0
-    pipe = pipe_profile = last_frame = None
+    pipe = pipe_profile = frame_count = None
     try:
         start_time = time()
 
@@ -140,71 +165,95 @@ def main():
         playback.set_real_time(False)
         timedelta = playback.get_duration()
         fps = color_stream.fps()
-        last_frame = calculate_frame_count(timedelta, fps)
+        frame_count = calculate_frame_count(timedelta, fps)
         
         end_time = time()
 
         print(f"Bag file is successfully read in {end_time-start_time} secs\n")
     
     except RuntimeError as e:
-        print("ERROR:", e)
+        print("Error:", e)
         exit(-1)
 
-    count = 0 # + args["nskip"]
-    max_count = args["nframes"] # + args["nskip"]
-    start_time = time()
+    validate_args_late(args, frame_count)
+
+    filename = "{name}.{ext}"
+    first = args["first"]
+    last = args["last"]
+    step = args["step"]
+    max = args["max"]
     align = rs.align(rs.stream.color) # Create alignment primitive with color as its target stream
     frame_time_map = {}
-    filename = "{frame}.{ext}"
+    frameset = None
+    iter = extracted = 0
     
-    # TODO: Use one of the followings later
-    # colorizer = rs.colorizer()       # Create colorizer primitive
-    # colorized_depth = np.asanyarray(colorizer.colorize(aligned_depth_frame).get_data())
-    # image = Image.fromarray(colorized_depth)
-    # depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
-    
-    while RUNNING:
-        # Store next frameset for later processing:
+    # TODO: Use the following later
+    # depth_img = cv2.applyColorMap(cv2.convertScaleAbs(depth_arr, alpha=0.03), cv2.COLORMAP_JET)
+
+    start_time = time()
+    while extracted < max and RUNNING:
+        # Read a frame
         try:
-            frameset = pipe.wait_for_frames()
+            frameset = pipe.wait_for_frames(timeout_ms=300)
+        
+        # End if no more frames to read
         except RuntimeError:
+            print("End of file reached, terminating.")
             break
 
-        count += 1
+        iter += 1
+
+        # Discard current frame if start point or step not reached
+        if iter < first or (iter - first) % step != 0:
+            continue
+
+        # End if end point reached
+        elif iter > last:
+            print(f"Last iteration reached, terminating.")
+            break
+
+        extracted += 1
 
         color_frame = frameset.get_color_frame()
-        # depth_frame = frameset.get_depth_frame() # (Unaligned) Depth Data
+        # depth_frame = frameset.get_depth_frame() # Unaligned depth data
 
         # Extract metadata identifying the frame
-        frame_number = frameset.get_frame_number()
+        frame_id = frameset.get_frame_number()
         frame_stamp = frameset.get_timestamp()
-        frame_time_map[frame_number] = frame_stamp
+        frame_time_map[frame_id] = frame_stamp
 
         # Print timestamp for current frame
-        print("Frame: {}, Frame ID: {}, Capture Time: {}".format(count, frame_number, frame_stamp))
+        print("Iteration: {}, Frame: {}, Frame ID: {}, Capture Time: {}".format(iter, extracted, frame_id, frame_stamp))
 
-        ## RGB Data
+        ## Store RGB Data
         color = np.asanyarray(color_frame.get_data())
         image = Image.fromarray(color)
-        # filename.format(frame=frame_number, ext="png")
-        # image.save(os.path.join(args["outputfolder"], str(count) + "_rgb.png"))
+        rgb_name = filename.format(name=frame_id, ext="png")
+        image.save(os.path.join(args["out"], rgb_name))
 
         # Stream Alignment (depth to color)
-        frameset = align.process(frameset) # Now the two images are pixel-perfect aligned and you can use depth data just like you would any of the other channels.
+        frameset = align.process(frameset) # Now the two images are pixel-perfect aligned
 
         # Get aligned depth frame
         aligned_depth_frame = frameset.get_depth_frame()
 
-        # Depth array
+        # Store depth array
         depth_arr = np.asanyarray(aligned_depth_frame.get_data())
         depth_arr = depth_arr * depth_scale # Store depth in meters
-        # filename.format(frame=frame_number, ext="npy")
-        # np.save(os.path.join(args["outputfolder"], str(count) + "_depth.npy"), depth_arr)
+        arr_name = filename.format(name=frame_id, ext="npy")
+        np.save(os.path.join(args["out"], arr_name), depth_arr)
+
+    # Store mapping from frame ID to timestamp
+    base = os.path.basename(args["file"])
+    video_id = os.path.splitext(base)[0]
+    dict_name = filename.format(name=video_id, ext="json")
+    with open(os.path.join(args["out"], dict_name), "w") as file:
+        json.dump(frame_time_map, file, indent=4)
 
     # Cleanup at the end:
     pipe.stop()
     end_time = time()
-    print("{} frames extracted in {} secs.".format(count - args["nskip"], end_time-start_time))
+    print("{} frames extracted in {} secs.".format(extracted, end_time-start_time))
 
 if __name__ == "__main__":
     main()
