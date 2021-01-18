@@ -41,10 +41,17 @@ def validate_args_late(args, frame_count):
     try:
         assert args['first'] <= frame_count, f"first({args['first']}) cannot be larger than max frames({frame_count}) in the input file"
         
+        # Set last to frame_count if it exceeds frame_count at the EOF
         if args['last'] > frame_count:
             # print(f"last({args['last']}) updated with frame count({frame_count})")
             args['last'] = frame_count
-    
+
+        # If step flag is not given but max flag is provided, then sample max items with equal intervals between from first to last
+        if '--step' not in sys.argv and args['max'] != np.inf:
+            step = (args['last'] - args['first'] + 1) // args['max']
+            args['step'] = step if step > 0 else 1 # step should be at least 1
+            # print(f'Step size is dynamically adjusted to {args["step"]} with respect to start: {args["first"]}, last: {args["last"]}, max: {args["max"]} parameters')
+
     except Exception as e:
         print("Error:", e)
         exit(-1)
