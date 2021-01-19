@@ -436,13 +436,14 @@ def apply_hough_line(bin_image, visualize=True, print_lines=20, plot_hough_space
 
 def apply_template_matching(depth_arr,
                             template,
-                            contour_width=23.8, # Given in y-scale
-                            y_step=50,          # Given in y-scale
-                            n_contours=50,
+                            start_depth=1.0,  # Given in depth-scale
+                            contour_width=25, # Given in y-scale
+                            y_step=5,         # Given in y-scale
+                            n_contours=1000,
                             dynamic_width=True,
                             ransac_thresh=15,
                             score_thresh=None,
-                            roi=[None,None,None,None],
+                            roi=[None,None,250,None], # min_y:max_y, min_x:max_x
                             fit_type="curve",
                             verbose=0):
     params = locals()
@@ -474,31 +475,33 @@ def apply_template_matching(depth_arr,
 
     # Print current arguments
     filtered = {}
+    print("[Info]: Applying template matching with args:")
     for k, v in params.items(): 
         if k not in ("depth_arr", "template"):
             filtered[k] = v
-    print("Applying template matching with args:", filtered)
+            print(f"- {k}: {v}")
     if verbose >= 1:
-        print("[Info]: Template shape:", template.shape)
+        print("\n[Info]: Template shape:", template.shape)
         utils.show_image(template, cmap="gray")
 
     # Extract binary masks for contours
     row = depth_arr[-1]
-    min_depth = row[row>0].min()
+    min_depth = start_depth # row[row>0].min()
     row = depth_arr[0]
-    upper_limit = depth_arr.max()
+    upper_limit = row.max()
 
     contour_masks = []
+    contour_infos = [] # For information in verbose mode (level-4) only
     for i in range(n_contours):
         ddepth = utils.estimate_ddepth(min_depth, contour_width)
         max_depth = min_depth + ddepth
         
         if max_depth > upper_limit:
-            print(f"[Warning]: Contour-{i} with depth {max_depth:.2f} is out-of-bounds. Stopping with {i+1} contours.")
+            print(f"[Warning]: Contour-{i}: ({min_depth:.2f}-{max_depth:.2f}) is out-of-bounds({upper_limit:.2f}). Stopping with {i} contours.")
             break
         
-        if verbose >= 4:
-            print(f"Contour-{i}: ({min_depth:.2f}-{max_depth:.2f})")
+        if verbose >= 3:
+            contour_infos.append((min_depth, max_depth))
         
         contour_mask = (roi_arr >= min_depth) & (roi_arr <= max_depth)
         contour_masks.append(contour_mask)
@@ -506,44 +509,42 @@ def apply_template_matching(depth_arr,
         new_step = utils.estimate_ddepth(min_depth, y_step)
         min_depth += new_step
 
-    if verbose >= 1:
-        print("[Info]: ROI with shape {} defined by y: {}, x: {}".format(roi_arr.shape, (min_y, max_y), (min_x, max_x)))
+    if verbose >= 2:
+        print("\n[Info]: Combined contour mask for ROI with shape {} defined by y: {}, x: {}".format(roi_arr.shape, (min_y, max_y), (min_x, max_x)))
         combined_mask = np.bitwise_or.reduce(np.array(contour_masks), axis=0)
         utils.show_image(combined_mask, cmap="gray")
     
     # Perform detection
     detections = []
-    for contour_mask in contour_masks:
+    for i, contour_mask in enumerate(contour_masks):
         contour_image = contour_mask.astype(np.float32)
         scores = cv2.matchTemplate(contour_image, template, cv2.TM_CCOEFF_NORMED)
         # Apply threshold on score map (if specified)
         if score_thresh:
             scores[scores < score_thresh] = 0
         # Take top corner for this contour
-        _top_scores, corners = utils.topk(scores, 1)
+        top_scores, corners = utils.topk(scores, 1)
         # Take the center of patch as corner location instead of top-left vertex
         corners += np.rint([[min_y+h/2, min_x+w/2]]).astype(np.int64) # 1x2 array to be broadcasted to Nx2
         detections.append(corners)
         
         # Visualize score map and detected points
-        if verbose >= 4:
-            plt.figure(figsize=(15,15))
+        if verbose >= 3:
+            fig, axs = plt.subplots(1, 2, figsize=(15,15))
             
             # Show score map from template matching
-            plt.subplot(121)
-            plt.imshow(scores, cmap = 'gray')
-            plt.title('Score Map')
+            axs[0].imshow(scores, cmap = 'gray')
+            axs[0].set_title('Score Map')
             
             # Draw bounding box and center points for detections
-            plt.subplot(122)
-            plt.title('Detected Point(s)')
-            ax = plt.gca()
+            axs[1].set_title('Detected Point(s)')
             for y, x in corners:
-                plt.scatter(x-min_x, y-min_y, color="red", marker="x")
+                axs[1].scatter(x-min_x, y-min_y, color="red", marker="x")
                 rect = plt.Rectangle([x-w/2-min_x, y-h/2-min_y], width=w, height=h, fill=False, ec="blue")
-                ax.add_patch(rect)
+                axs[1].add_patch(rect)
             
-            plt.imshow(contour_image, cmap = 'gray')
+            axs[1].imshow(contour_image, cmap = 'gray')
+            fig.suptitle("Contour-{}: ({:.2f}-{:.2f}), Detection Score: {:.2f}".format(i, *contour_infos[i], top_scores.item()), size=14, y=0.77)
             plt.show()
 
     detections = np.array(detections).reshape(-1, 2)
@@ -554,26 +555,26 @@ def apply_template_matching(depth_arr,
     # Observe that variation is high along x axis. Use RANSAC to regress line as x = m * y + b.
     model.fit(detections[:,0].reshape(-1, 1), detections[:,1].reshape(-1, 1)) # Column vector is required.
     
-    inliers = model.inlier_mask_
-    outliers = ~inliers
-    misdetections = detections[outliers]
-    detections = detections[inliers]
-    num_inliers = detections.shape[0]
-    print("[Info]: Inliers/All: {}/{}".format(num_inliers, num_detections))
+    inlier_mask = model.inlier_mask_
+    outlier_mask = ~inlier_mask
+    outliers = detections[outlier_mask]
+    inliers = detections[inlier_mask]
+    num_inliers = inliers.shape[0]
+    print("[Info]: Inliers/All: {}/{}, Ratio: {:.2f}".format(num_inliers, num_detections, num_inliers/num_detections))
     
     if fit_type == "line":
         linear_model = model.estimator_
         p = {"m": linear_model.coef_.item(), "b": linear_model.intercept_.item(), "type": "slope"}
 
     elif fit_type == "curve":
-        popt, _pcov = curve_fit(utils.parabola, detections[:,0], detections[:,1])
+        popt, _pcov = curve_fit(utils.parabola, inliers[:,0], inliers[:,1])
         p = {"a": popt[0], "b": popt[1], "c": popt[2], "type": "parabola"}
     
     else:
         raise NotImplementedError
 
     edge_pixels = utils.compute_visible_pixels(depth_arr.shape, p)
-    return edge_pixels, detections, misdetections
+    return edge_pixels, inliers, outliers
 
 # Binding names to actual methods:
 preproc_funcs = {

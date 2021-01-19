@@ -99,6 +99,8 @@ def arg_handler():
                        metavar="FOLDER",
                        default="./extracted")
 
+    optional.add_argument("--depth", help="Save depth as PNG", default=False, action="store_true")
+
     required = parser.add_argument_group(title='Required arguments')
 
     required.add_argument("-f", "--file", 
@@ -184,24 +186,22 @@ def main():
 
     validate_args_late(args, frame_count)
 
-    filename = "{name}.{ext}"
+    filename = "{name}_{type}.{ext}"
     first = args["first"]
     last = args["last"]
     step = args["step"]
     max = args["max"]
     align = rs.align(rs.stream.color) # Create alignment primitive with color as its target stream
+    colorizer = rs.colorizer()
     frame_time_map = {}
     frameset = None
     iter = extracted = 0
     
-    # TODO: Use the following later
-    # depth_img = cv2.applyColorMap(cv2.convertScaleAbs(depth_arr, alpha=0.03), cv2.COLORMAP_JET)
-
     start_time = time()
     while extracted < max and RUNNING:
         # Read a frame
         try:
-            frameset = pipe.wait_for_frames(timeout_ms=300)
+            frameset = pipe.wait_for_frames(timeout_ms=5000)
         
         # End if no more frames to read
         except RuntimeError:
@@ -235,7 +235,7 @@ def main():
         ## Store RGB Data
         color = np.asanyarray(color_frame.get_data())
         image = Image.fromarray(color)
-        rgb_name = filename.format(name=frame_id, ext="png")
+        rgb_name = filename.format(name=frame_id, type="rgb", ext="png")
         image.save(os.path.join(args["out"], rgb_name))
 
         # Stream Alignment (depth to color)
@@ -247,13 +247,20 @@ def main():
         # Store depth array
         depth_arr = np.asanyarray(aligned_depth_frame.get_data())
         depth_arr = depth_arr * depth_scale # Store depth in meters
-        arr_name = filename.format(name=frame_id, ext="npy")
+        arr_name = filename.format(name=frame_id, type="depth", ext="npy")
         np.save(os.path.join(args["out"], arr_name), depth_arr)
+
+        # Store depth as colorized image (optional)
+        if args["depth"]:
+            colorized = np.asanyarray(colorizer.colorize(aligned_depth_frame).get_data())
+            image = Image.fromarray(colorized)
+            depth_rgb_name = filename.format(name=frame_id, type="depth", ext="png")
+            image.save(os.path.join(args["out"], depth_rgb_name))
 
     # Store mapping from frame ID to timestamp
     base = os.path.basename(args["file"])
     video_id = os.path.splitext(base)[0]
-    dict_name = filename.format(name=video_id, ext="json")
+    dict_name = filename.format(name=video_id, type="time", ext="json")
     with open(os.path.join(args["out"], dict_name), "w") as file:
         json.dump(frame_time_map, file, indent=4)
 

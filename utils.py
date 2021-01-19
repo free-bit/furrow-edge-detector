@@ -70,16 +70,22 @@ def pop(stack, log):
         stack.pop()
     update_log(log, stack)
 
+def estimate_y(depth, m=0.0027, b=0.06):
+    return (1 / depth - b) / m
+
+def estimate_depth(y, m=0.0027, b=0.06):
+    return 1 / (m * y + b)
+
 def estimate_dy(depth0, ddepth, m=0.0027, b=0.06):
-    y0 = (1 / depth0 - b) / m
+    y0 = estimate_y(depth0, m, b)
     depth1 = depth0 + ddepth
-    y1 = (1 / depth1 - b) / m
+    y1 = estimate_y(depth1, m, b)
     return abs(y1-y0)
 
 def estimate_ddepth(depth0, dy, m=0.0027, b=0.06):
-    y0 = (1 / depth0 - b) / m
+    y0 = estimate_y(depth0, m, b)
     y1 = y0 - dy
-    depth1 = 1 / (m * y1 + b)
+    depth1 = estimate_depth(y1, m, b)
     return abs(depth1-depth0)
 
 def parabola(y, a, b, c):
@@ -367,3 +373,11 @@ def print_full(arr, outfile="temp.csv"):
     header = list(map(str, np.arange(1, arr.shape[1] + 1, 1)))
     print(list(header))
     pd.DataFrame(arr).to_csv(outfile, header=header, index=False, index_label=True)
+
+def colorize(depth_arr):
+    # Initialize disparity with zeros, take 1/depth_arr where depth_arr!=0
+    disparity = np.divide(1, depth_arr, out=np.zeros_like(depth_arr), where=depth_arr!=0)
+    cm = plt.get_cmap('jet')
+    depth_image = cm(disparity)
+    plt.imshow(depth_image)
+    plt.show()
