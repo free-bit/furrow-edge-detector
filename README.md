@@ -8,11 +8,15 @@
 
 ### librealsense
 
+[Python API](https://intelrealsense.github.io/librealsense/python_docs/_generated/pyrealsense2.html)
+
 [Projection in RealSense SDK 2.0](https://github.com/IntelRealSense/librealsense/wiki/Projection-in-RealSense-SDK-2.0)
 
 [Projection Source Code](https://github.com/IntelRealSense/librealsense/blob/5e73f7bb906a3cbec8ae43e888f182cc56c18692/include/librealsense2/rsutil.h#L15-L43)
 
 [Deprojection Source Code](https://github.com/IntelRealSense/librealsense/blob/5e73f7bb906a3cbec8ae43e888f182cc56c18692/include/librealsense2/rsutil.h#L46-L66)
+
+[Depth Colorization](https://dev.intelrealsense.com/docs/depth-image-compression-by-colorization-for-intel-realsense-depth-cameras)
 
 [List of Available Tools](https://github.com/IntelRealSense/librealsense/tree/master/tools)
 
@@ -41,3 +45,7 @@
 ### SciPy
 
 [Curve Fitting](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.curve_fit.html)
+
+### Open3D
+
+[3D Point Cloud Visualization](http://open3d.org/html/tutorial/Basic/visualization.html)

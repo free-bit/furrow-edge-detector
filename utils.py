@@ -26,6 +26,29 @@ def topk(arr, k, largest=True):
     top_vals = arr[top_idxs]
     return (top_vals, np.array(list(zip(*top_idxs))))
 
+def take_items(items, start, end, n=None):
+    size = len(items)
+
+    if start < 0:
+        start = 0
+
+    if end is None or end >= size:
+        end = size-1
+    
+    if start > end or n <= 0:
+        return []
+
+    items = items[start:end+1]
+    size = len(items)
+    
+    if n is None or n >= size:
+        return items
+    
+    # Divide items into n splits take one item from each part
+    splits = np.array_split(items, n)
+    items = [split[0] for split in splits[:-1]] + [splits[-1][-1]]
+    return items
+
 def save_config(filename, func_stack, config_stack):
     if not filename.endswith(".json"):
         filename += ".json"
