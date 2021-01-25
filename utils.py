@@ -26,13 +26,13 @@ def topk(arr, k, largest=True):
     top_vals = arr[top_idxs]
     return (top_vals, np.array(list(zip(*top_idxs))))
 
-def take_items(items, start, end, n=None):
+def take_items(items, start, end, n=np.inf):
     size = len(items)
 
     if start < 0:
         start = 0
 
-    if end is None or end >= size:
+    if end >= size:
         end = size-1
     
     if start > end or n <= 0:
@@ -41,7 +41,7 @@ def take_items(items, start, end, n=None):
     items = items[start:end+1]
     size = len(items)
     
-    if n is None or n >= size:
+    if n >= size:
         return items
     
     # Divide items into n splits take one item from each part
@@ -168,7 +168,7 @@ def compute_visible_pixels(size, p):
     
     return pixel_coords
 
-def convert_coord2mask(shape, pixel_coords):
+def coord_to_mask(shape, pixel_coords):
     """Convert pixel coordinates of a shape into a binary mask"""
     mask = np.zeros(shape, dtype=np.uint8)
     mask[pixel_coords[:, 0], pixel_coords[:, 1]] = 255
