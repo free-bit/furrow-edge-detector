@@ -11,8 +11,6 @@ from pprint import pprint
 from scipy.cluster.hierarchy import dendrogram
 from sklearn.cluster import AgglomerativeClustering
 
-import image_processing
-
 def topk(arr, k, largest=True):
     """Find top k elements in D dimensional array and returns values (k,) and indices (kxD)"""
     assert k > 0, "k({}) has to be positive.".format(k)
@@ -201,13 +199,6 @@ def set_roi(image, num_corners=5):
     plt.waitforbuttonpress()
     
     return roi_corners
-
-def apply_functions(image, func_stack, config_stack):
-    show_image(image)
-    for i in range(len(func_stack)):
-        key = func_stack[i]
-        image = image_processing.funcs[key](image, **config_stack[i])
-    return image
     
 def show_image(image, h=10, w=10, cmap=None):
     plt.figure(figsize=(w,h))

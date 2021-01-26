@@ -8,7 +8,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 import torchvision
 
-from utils import take_items
+from utils.helpers import take_items
 
 ID_FILE = "{folder_id}_ids.txt"
 TIME_FILE = "{folder_id}_time.json"
@@ -140,7 +140,7 @@ def main():
     print(dataset.frame_ids)
     size = len(dataset)
 
-    from utils import show_image, show_image_pairs, coord_to_mask
+    from utils.helpers import show_image, show_image_pairs, coord_to_mask
     rand_idx = np.random.randint(0, size)
     item = dataset.__getitem__(rand_idx)
     print(item)

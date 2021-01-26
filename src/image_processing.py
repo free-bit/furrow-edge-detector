@@ -12,55 +12,55 @@ from skimage.measure import find_contours
 from skimage.morphology import convex_hull_image, skeletonize
 from sklearn.linear_model import RANSACRegressor
 
-import utils
+from utils.helpers import compute_visible_pixels, estimate_ddepth, topk, parabola, show_image, show_corners, show_shapes
 
 def convert_grayscale(image, visualize=True, **kwargs): # **kwargs is ignored
     """Takes an RGB (3 channel) image, returns the grayscale image (1 channel)"""
     print("Converting to grayscale")
     image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def enhance_contrast(image, visualize=True, **kwargs): # **kwargs is ignored
     print("Enhancing contrast")
     image = cv2.equalizeHist(image)
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_dilation(image, visualize=True, **kwargs):
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, ksize=(kwargs['ksize'], kwargs['ksize']))
     dilated = cv2.dilate(image, kernel, iterations=1)
     if visualize:
-        utils.show_image(dilated, cmap="gray")
+        show_image(dilated, cmap="gray")
     return dilated
 
 def apply_erosion(image, visualize=True, **kwargs):
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, ksize=(kwargs['ksize'], kwargs['ksize']))
     eroded = cv2.erode(image, kernel, iterations=1)
     if visualize:
-        utils.show_image(eroded, cmap="gray")
+        show_image(eroded, cmap="gray")
     return eroded
 
 def apply_opening(image, visualize=True, **kwargs):
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, ksize=(kwargs['ksize'], kwargs['ksize']))
     opened = cv2.morphologyEx(image, cv2.MORPH_OPEN, kernel)
     if visualize:
-        utils.show_image(opened, cmap="gray")
+        show_image(opened, cmap="gray")
     return opened
 
 def apply_closing(image, visualize=True, **kwargs):
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, ksize=(kwargs['ksize'], kwargs['ksize']))
     closed = cv2.morphologyEx(image, cv2.MORPH_CLOSE, kernel)
     if visualize:
-        utils.show_image(closed, cmap="gray")
+        show_image(closed, cmap="gray")
     return closed
 
 def apply_skeletonization(image, visualize=True, **kwargs):
     skeleton = skeletonize(image).astype(np.uint8)
     if visualize:
-        utils.show_image(skeleton, cmap="gray")
+        show_image(skeleton, cmap="gray")
     return skeleton
 
 def apply_threshold(gray_img, visualize=True, **kwargs):
@@ -68,7 +68,7 @@ def apply_threshold(gray_img, visualize=True, **kwargs):
     print("Applying standard threshold with args:", kwargs)
     _retval, gray_img = cv2.threshold(gray_img, **kwargs)
     if visualize:
-        utils.show_image(gray_img, cmap="gray")
+        show_image(gray_img, cmap="gray")
     return gray_img
 
 def apply_channelwise_threshold(image, visualize=True, **kwargs):
@@ -87,7 +87,7 @@ def apply_channelwise_threshold(image, visualize=True, **kwargs):
     mask = np.bitwise_and.reduce(mask, axis=2)[..., np.newaxis] # Reduce binary masks with C-channels into 1-channel by taking AND over channels
     thresh_image = image * mask
     if visualize:
-        utils.show_image(thresh_image, cmap="gray")
+        show_image(thresh_image, cmap="gray")
     return thresh_image
 
 def apply_adaptive_threshold(gray_img, **kwargs):
@@ -127,7 +127,7 @@ def apply_spatial_threshold(image, visualize=True, **kwargs):
     new_image[range_y[0]:range_y[1], range_x[0]:range_x[1]] = crop
     
     if visualize:
-        utils.show_image(new_image)
+        show_image(new_image)
     
     return new_image
 
@@ -141,7 +141,7 @@ def apply_roi_threshold(image, visualize=True, **kwargs):
     image = cv2.bitwise_and(image, mask)
 
     if visualize:
-        utils.show_image(image)
+        show_image(image)
         
     return image
 
@@ -154,35 +154,35 @@ def apply_filter(image, kernel, visualize=True):
     print(kernel)
     image = cv2.filter2D(image, ddepth=-1, kernel=kernel)
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_avg_blur(image, visualize=True, **kwargs):
     print("Applying average blur with args:", kwargs)
     image = cv2.blur(image, **kwargs)
     if visualize:
-        utils.show_image(image)
+        show_image(image)
     return image
 
 def apply_median_blur(image, visualize=True, **kwargs):
     print("Applying median blur with args:", kwargs)
     image = cv2.medianBlur(image, **kwargs)
     if visualize:
-        utils.show_image(image)
+        show_image(image)
     return image
 
 def apply_bilateral_filter(image, visualize=True, **kwargs):
     print("Applying bilateral filter with args:", kwargs)
     image = cv2.bilateralFilter(image, **kwargs)
     if visualize:
-        utils.show_image(image)
+        show_image(image)
     return image
 
 def apply_gaussian_blur(image, visualize=True, **kwargs):
     print("Applying Gaussian blur with args:", kwargs)
     image = cv2.GaussianBlur(image, **kwargs)
     if visualize:
-        utils.show_image(image)
+        show_image(image)
     return image
 
 def apply_laplacian(image, visualize=True, **kwargs): 
@@ -191,7 +191,7 @@ def apply_laplacian(image, visualize=True, **kwargs):
     image = np.absolute(image) # Take absolute value to make it unsigned
     image = np.uint8(image)    # Convert dtype back to uint8
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_sobelv(image, visualize=True, **kwargs):
@@ -200,7 +200,7 @@ def apply_sobelv(image, visualize=True, **kwargs):
     image = np.absolute(image) # Take absolute value to make it unsigned
     image = np.uint8(image)    # Convert dtype back to uint8
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_sobelh(image, visualize=True, **kwargs):
@@ -209,7 +209,7 @@ def apply_sobelh(image, visualize=True, **kwargs):
     image = np.absolute(image) # Take absolute value to make it unsigned
     image = np.uint8(image)    # Convert dtype back to uint8
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_scharrh(image, visualize=True, **kwargs):
@@ -218,7 +218,7 @@ def apply_scharrh(image, visualize=True, **kwargs):
     image = np.absolute(image) # Take absolute value to make it unsigned
     image = np.uint8(image)    # Convert dtype back to uint8
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_scharrv(image, visualize=True, **kwargs):
@@ -227,49 +227,49 @@ def apply_scharrv(image, visualize=True, **kwargs):
     image = np.absolute(image) # Take absolute value to make it unsigned
     image = np.uint8(image)    # Convert dtype back to uint8
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_prewitth(image, visualize=True, **kwargs):
     print("Applying Prewitt filter for horizontal edges (along x-axis) with args:", kwargs)
     image = filters.prewitt_h(image)
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_prewittv(image, visualize=True, **kwargs):
     print("Applying Prewitt filter for vertical edges (along y-axis) with args:", kwargs)
     image = filters.prewitt_v(image)
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_farid(image, visualize=True, **kwargs):
     print("Applying Farid filter with args:", kwargs)
     image = filters.farid(image)
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_faridh(image, visualize=True, **kwargs):
     print("Applying Farid filter for horizontal edges (along x-axis) with args:", kwargs)
     image = filters.farid_h(image)
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_faridv(image, visualize=True, **kwargs):
     print("Applying Farid filter for vertical edges (along y-axis) with args:", kwargs)
     image = filters.farid_v(image)
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_roberts(image, visualize=True, **kwargs):
     print("Applying Roberts filter for diagonal edges with args:", kwargs)
     image = filters.roberts(image)
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_canny(image, visualize=True, **kwargs):
@@ -277,7 +277,7 @@ def apply_canny(image, visualize=True, **kwargs):
     print("Applying canny with args:", kwargs)
     image = cv2.Canny(image, **kwargs)
     if visualize:
-        utils.show_image(image, cmap="gray")
+        show_image(image, cmap="gray")
     return image
 
 def apply_shi_tomasi(gray_image, visualize=True, **kwargs):
@@ -287,7 +287,7 @@ def apply_shi_tomasi(gray_image, visualize=True, **kwargs):
     corners = np.squeeze(corners, axis=1) # (N, 1, 2) -> (N, 2)
     corners[:, [0,1]] = corners[:, [1,0]] # (x, y) -> (row/y, col/x)
     if visualize:
-        utils.show_corners(gray_image, corners)
+        show_corners(gray_image, corners)
     return corners
 
 def apply_dsift(gray_image, visualize=True, top_n=100, **kwargs):
@@ -297,7 +297,7 @@ def apply_dsift(gray_image, visualize=True, top_n=100, **kwargs):
     top_corners = np.argsort(descr_norm)[-top_n:]
     corners = corners[top_corners]
     if visualize:
-        utils.show_corners(gray_image, corners)
+        show_corners(gray_image, corners)
     return corners
 
 def apply_sift(gray_image, visualize=True, **kwargs):
@@ -317,7 +317,7 @@ def apply_sift(gray_image, visualize=True, **kwargs):
         plt.figure(figsize=(10,10))
         plt.imshow(fig, cmap="gray")
         plt.show()
-        # utils.show_corners(gray_image, corners)
+        # show_corners(gray_image, corners)
     return corners
 
 def apply_convex_hull(points, shape, visualize=True, **kwargs):
@@ -328,7 +328,7 @@ def apply_convex_hull(points, shape, visualize=True, **kwargs):
     vertices[:, [0,1]] = vertices[:, [1,0]] # (x, y) -> (y/row, x/col)
 
     if visualize:
-        utils.show_shapes(np.zeros(shape, dtype=np.uint8), [np.rint(vertices).astype(np.int32)], cmap="gray")
+        show_shapes(np.zeros(shape, dtype=np.uint8), [np.rint(vertices).astype(np.int32)], cmap="gray")
 
     return vertices
 
@@ -346,7 +346,7 @@ def apply_contour(bin_image, visualize=True, **kwargs):
         contours[i] = contours[i][:, [1,0]] # (x, y) -> (y/row, x/col)
     
     if visualize:
-        utils.show_shapes(np.zeros_like(bin_image), contours, shapeIdx=-1, cmap="gray")
+        show_shapes(np.zeros_like(bin_image), contours, shapeIdx=-1, cmap="gray")
     
     return contours
 
@@ -425,12 +425,12 @@ def apply_hough_line(bin_image, visualize=True, print_lines=20, plot_hough_space
     line_list = []
     for vote, theta, rho in peak_params:
         p = {"theta": theta, "rho": rho, "type": "hough"}
-        pixel_coords = utils.compute_visible_pixels(bin_image.shape, p)
+        pixel_coords = compute_visible_pixels(bin_image.shape, p)
         line_list.append(pixel_coords)
     
     # Visualize binary mask for all lines found
     if visualize:
-        utils.show_shapes(np.zeros_like(bin_image, dtype=np.uint8), line_list, shapeIdx="all", cmap="gray")
+        show_shapes(np.zeros_like(bin_image, dtype=np.uint8), line_list, shapeIdx="all", cmap="gray")
         
     return line_list
 
@@ -482,7 +482,7 @@ def apply_template_matching(depth_arr,
             print(f"- {k}: {v}")
     if verbose >= 1:
         print("\n[Info]: Template shape:", template.shape)
-        utils.show_image(template, cmap="gray")
+        show_image(template, cmap="gray")
 
     # Extract binary masks for contours
     row = depth_arr[-1]
@@ -493,7 +493,7 @@ def apply_template_matching(depth_arr,
     contour_masks = []
     contour_infos = [] # For information in verbose mode (level-4) only
     for i in range(n_contours):
-        ddepth = utils.estimate_ddepth(min_depth, contour_width)
+        ddepth = estimate_ddepth(min_depth, contour_width)
         max_depth = min_depth + ddepth
         
         if max_depth > upper_limit:
@@ -506,13 +506,13 @@ def apply_template_matching(depth_arr,
         contour_mask = (roi_arr >= min_depth) & (roi_arr <= max_depth)
         contour_masks.append(contour_mask)
         
-        new_step = utils.estimate_ddepth(min_depth, y_step)
+        new_step = estimate_ddepth(min_depth, y_step)
         min_depth += new_step
 
     if verbose >= 2:
         print("\n[Info]: Combined contour mask for ROI with shape {} defined by y: {}, x: {}".format(roi_arr.shape, (min_y, max_y), (min_x, max_x)))
         combined_mask = np.bitwise_or.reduce(np.array(contour_masks), axis=0)
-        utils.show_image(combined_mask, cmap="gray")
+        show_image(combined_mask, cmap="gray")
     
     # Perform detection
     detections = []
@@ -523,7 +523,7 @@ def apply_template_matching(depth_arr,
         if score_thresh:
             scores[scores < score_thresh] = 0
         # Take top corner for this contour
-        top_scores, corners = utils.topk(scores, 1)
+        top_scores, corners = topk(scores, 1)
         # Take the center of patch as corner location instead of top-left vertex
         corners += np.rint([[min_y+h/2, min_x+w/2]]).astype(np.int64) # 1x2 array to be broadcasted to Nx2
         detections.append(corners)
@@ -567,13 +567,13 @@ def apply_template_matching(depth_arr,
         p = {"m": linear_model.coef_.item(), "b": linear_model.intercept_.item(), "type": "slope"}
 
     elif fit_type == "curve":
-        popt, _pcov = curve_fit(utils.parabola, inliers[:,0], inliers[:,1])
+        popt, _pcov = curve_fit(parabola, inliers[:,0], inliers[:,1])
         p = {"a": popt[0], "b": popt[1], "c": popt[2], "type": "parabola"}
     
     else:
         raise NotImplementedError
 
-    edge_pixels = utils.compute_visible_pixels(depth_arr.shape, p)
+    edge_pixels = compute_visible_pixels(depth_arr.shape, p)
     return edge_pixels, inliers, outliers
 
 # Binding names to actual methods:
@@ -607,3 +607,10 @@ detect_funcs = {
 }
 
 funcs = {**preproc_funcs, **detect_funcs}
+
+def apply_functions(image, func_stack, config_stack):
+    show_image(image)
+    for i in range(len(func_stack)):
+        key = func_stack[i]
+        image = funcs[key](image, **config_stack[i])
+    return image
