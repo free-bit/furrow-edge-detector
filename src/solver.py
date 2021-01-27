@@ -3,11 +3,16 @@ import signal
 
 import numpy as np
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from time import time
 from tqdm.auto import tqdm
 
-# TODO: Checkpoint
+# TODO: 
+# Metrics
+# Checkpoint
+# Notebook
 
 EXIT = False
 
@@ -62,10 +67,27 @@ class Solver(object):
         # model.to(device)
         pass
 
+    def class_balanced_bce(self, logits, targets):
+        total = np.prod(targets.shape[2:4])                      # total pixel count: scalar
+        pos_count = torch.sum(targets, dim=(2,3), keepdim=True)  # + count per image: Nx1x1x1
+        neg_count = total - pos_count                            # - count per image: Nx1x1x1
+        pos_weights = targets * (neg_count / pos_count)          # b / (1 - b) term:  Nx1xHxW
+        weights = torch.ones_like(targets) * (pos_count / total) # (1 - b) term:      Nx1xHxW
+
+        # Sigmoid + Weighted BCE:
+        # weights * [pos_weights * y * -log(sigmoid(logits)) + (1 - y) * -log(1 - sigmoid(x))]
+        # 'mean' reduction does the followings:
+        # 1) avg loss of pixels for each image
+        # 2) avg loss of images in the batch
+        loss = F.binary_cross_entropy_with_logits(logits, targets, weight=weights, pos_weight=pos_weights, reduction='mean')
+
+        return loss
+
     def forward(self, batch): # TODO: loss calculation, accuracy and so on
+        # batch: NxCxHxW, targets: Nx1xHxW
         # ... = batch
         # preds = self.model(...)
-
+        # self.class_balanced_bce(preds, targets)
         # loss = self.loss_func(preds, y)
         # acc = self.acc_func(preds, y)
 
