@@ -74,7 +74,7 @@ class Solver(object):
         pos_weights = targets * (neg_count / pos_count)          # b / (1 - b) term:  Nx1xHxW
         weights = torch.ones_like(targets) * (pos_count / total) # (1 - b) term:      Nx1xHxW
 
-        # Sigmoid + Weighted BCE:
+        # BCE with Logits == Sigmoid(Logits) + Weighted BCE:
         # weights * [pos_weights * y * -log(sigmoid(logits)) + (1 - y) * -log(1 - sigmoid(x))]
         # 'mean' reduction does the followings:
         # 1) avg loss of pixels for each image
@@ -82,6 +82,19 @@ class Solver(object):
         loss = F.binary_cross_entropy_with_logits(logits, targets, weight=weights, pos_weight=pos_weights, reduction='mean')
 
         return loss
+
+    def f1_score(self, logits, targets, threshold=0.5):
+        preds = torch.sigmoid(logits) > threshold
+        
+        tp = (preds.bool() * targets.bool()).sum(dim=(2,3))
+        fp = (preds.bool() * ~targets.bool()).sum(dim=(2,3))
+        tn = (~preds.bool() * ~targets.bool()).sum(dim=(2,3))
+        
+        precision = tp / (tp + fp)
+        recall = tp / (tp + tn)
+        f1 = (2 * precision * recall) / (precision + recall)
+        
+        return f1.mean()
 
     def forward(self, batch): # TODO: loss calculation, accuracy and so on
         # batch: NxCxHxW, targets: Nx1xHxW
