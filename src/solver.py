@@ -3,16 +3,17 @@ import signal
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from time import time
 from tqdm.auto import tqdm
 
+from src.model import RidgeDetector
+from utils.helpers import save_checkpoint, load_checkpoint
+
 # TODO: 
-# Metrics
-# Checkpoint
-# Notebook
+# Debug
+# More metrics
 
 EXIT = False
 
@@ -29,43 +30,21 @@ def interrupt_handler(signum, frame):
 signal.signal(signal.SIGINT, interrupt_handler)
 
 class Solver(object):
-    def __init__(self,
-                 model,
-                 optim_args):
-        self.model = model
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.writer = SummaryWriter(optim_args["log_path"])
-        self.ckpt_path = optim_args["ckpt_path"]
+    def __init__(self, solver_args):
+        # self.loss_func = solver_args["loss_func"]
+        # self.acc_func = solver_args["acc_func"]
+        self.writer = SummaryWriter(solver_args["log_path"])
         self.clear_history()
+        self.solver_args = solver_args
 
-        self.model.to(self.device)
-        self.optim = None # torch.nn.optim(filter(lambda p: p.requires_grad, model.parameters()), **self.optim_args)
-        self.loss_func = None
-        self.acc_func = None
+    def get_args(self):
+        return self.solver_args
 
     def clear_history(self):
         self.train_loss_hist = []
         self.train_acc_hist = []
         self.val_loss_hist = []
         self.val_acc_hist = []
-    
-    def save_checkpoint(self, epoch):
-        # TODO: Architectural parameters must also be saved
-        checkpoint = { 
-            'epoch': epoch,
-            'model': self.model.state_dict(),
-            'optimizer': self.optim.state_dict()}
-        file = f'{epoch}_ckpt.pth'
-        path = os.path.join(self.ckpt_path, file)
-        torch.save(checkpoint, path)
-
-    def load_checkpoint(self, path):
-        # TODO: Architecture must be reinstantiated wrt earlier run
-        # model = TheModelClass(*args, **kwargs)
-        # checkpoint = torch.load(path)
-        # model.load_state_dict(checkpoint["model"])
-        # model.to(device)
-        pass
 
     def class_balanced_bce(self, logits, targets):
         total = np.prod(targets.shape[2:4])                      # total pixel count: scalar
@@ -96,25 +75,26 @@ class Solver(object):
         
         return f1.mean()
 
-    def forward(self, batch): # TODO: loss calculation, accuracy and so on
-        # batch: NxCxHxW, targets: Nx1xHxW
-        # ... = batch
-        # preds = self.model(...)
-        # self.class_balanced_bce(preds, targets)
-        # loss = self.loss_func(preds, y)
-        # acc = self.acc_func(preds, y)
+    def forward(self, model, batch):
+        # depth_arr: NxCxHxW, targets: Nx1xHxW
+        depth_arr = batch['depth_arr']
+        targets = batch['edge_mask']
+        print(depth_arr.shape)
+        print(targets.shape)
+        logits = model(depth_arr)
+        
+        loss = self.class_balanced_bce(logits, targets)
+        acc = self.f1_score(logits, targets)
 
-        # return loss, acc
+        return loss, acc
 
-        return None, None
-
-    def backward(self, loss):
+    def backward(self, optim, loss):
         loss.backward()
-        self.optim.step()
-        self.optim.zero_grad()
+        optim.step()
+        optim.zero_grad()
 
-    def train_one_epoch(self, train_loader, epoch, log_freq):
-        self.model.train()
+    def train_one_epoch(self, model, optim, train_loader, epoch, log_freq):
+        model.train()
 
         total_iter = len(train_loader)
         train_losses = []
@@ -122,8 +102,8 @@ class Solver(object):
         
         # iter: [1, total_iter]
         for iter, batch in enumerate(tqdm(train_loader), 1):
-            train_loss, train_acc = self.forward(batch)
-            self.backward(train_loss)
+            train_loss, train_acc = self.forward(model, batch)
+            self.backward(optim, train_loss)
 
             train_loss = train_loss.data.cpu().numpy()
             train_losses.append(train_loss)
@@ -141,8 +121,8 @@ class Solver(object):
 
         return mean_train_loss, mean_train_acc
 
-    def validate_one_epoch(self, val_loader, epoch, log_freq=0):
-        self.model.eval()
+    def validate_one_epoch(self, model, val_loader, epoch, log_freq=0):
+        model.eval()
 
         with torch.no_grad():
             total_iter = len(val_loader)
@@ -151,7 +131,7 @@ class Solver(object):
 
             # iter: [1, total_iter]
             for iter, batch in enumerate(tqdm(val_loader), 1):
-                val_loss, val_acc = self.forward(batch)
+                val_loss, val_acc = self.forward(model, batch)
                 val_loss = val_loss.data.cpu().numpy()
                 val_losses.append(val_loss)
                 val_accs.append(val_acc)
@@ -168,11 +148,21 @@ class Solver(object):
 
         return mean_val_loss, mean_val_acc
 
-    def train(self, train_loader, val_loader, max_epochs=10, val_freq=0, log_freq=0, ckpt_freq=0):
+    def train(self, model, optim, train_loader, val_loader, train_args):
+        ckpt_path = train_args['ckpt_path']
+        max_epochs = train_args.get('max_epochs', 10)
+        val_freq = train_args.get('val_freq', 1)
+        log_freq = train_args.get('log_freq', 0)
+        ckpt_freq = train_args.get('ckpt_freq', 0)
+        
+        best_loss = np.inf
+        best_acc = -1
+        
         # epoch: [1, max_epochs]
+        epoch = 0
         for epoch in range(1, max_epochs+1):
             # Perform a full pass over training data
-            mean_train_loss, mean_train_acc = self.train_one_epoch(train_loader, epoch, log_freq)
+            mean_train_loss, mean_train_acc = self.train_one_epoch(model, optim, train_loader, epoch, log_freq)
 
             print(f"[Epoch {epoch}/{max_epochs}] TRAIN mean acc/loss: {mean_train_acc}/{mean_train_loss}")
 
@@ -183,9 +173,11 @@ class Solver(object):
             self.writer.add_scalar('Epoch/Accuracy/Train', mean_train_acc, epoch)
             self.writer.flush()
 
-            # Perform a full pass over validation data
+            # Perform a full pass over validation data (according to specified period)
+            mean_val_loss = np.inf
+            mean_val_acc = -1
             if val_freq > 0 and iter % val_freq == 0:
-                mean_val_loss, mean_val_acc = self.validate_one_epoch(val_loader, epoch, log_freq)
+                mean_val_loss, mean_val_acc = self.validate_one_epoch(model, val_loader, epoch, log_freq)
                 
                 print(f"[Epoch {epoch}/{max_epochs}] VAL mean acc/loss: {mean_val_acc}/{mean_val_loss}")
 
@@ -196,9 +188,15 @@ class Solver(object):
                 self.writer.add_scalar('Epoch/Accuracy/Val', mean_val_acc, epoch)
                 self.writer.flush()
 
-            # TODO: Save model with best validation loss or accuracy
-            if ckpt_freq > 0 and iter % ckpt_freq == 0:
-                self.save_checkpoint(epoch)
+            # Checkpoint is disabled for ckpt_freq <= 0
+            make_ckpt = False
+            if ckpt_freq > 0: 
+                make_ckpt |= (iter % ckpt_freq == 0) # Check for frequency
+                make_ckpt |= (mean_val_loss < best_loss and mean_val_acc > best_acc) # Check for val loss & acc improvement
+
+            # If checkpointing is enabled and save checkpoint periodically or whenever there is an improvement 
+            if make_ckpt:
+                save_checkpoint(ckpt_path, epoch, model, optim, mean_val_loss, mean_val_acc)
 
             # When KeyboardInterrupt is triggered, perform a controlled termination
             if EXIT:
@@ -212,14 +210,20 @@ class Solver(object):
         # })
         # self.writer.flush()
 
-    def test(self, test_loader):
-        self.model.eval()
+    def test(self, model, test_loader):
+        model.eval()
         
         outputs = []
 
         with torch.no_grad():
             for batch in tqdm(test_loader):
-                output = self.model(batch)
+                output = model(batch)
                 outputs.append(output)
         
         return outputs
+
+    def __str__(self):
+        log_path = self.solver_args["log_path"]
+        info = "Status of solver:\n"+\
+               f"* Log path: {log_path}\n"
+        return info

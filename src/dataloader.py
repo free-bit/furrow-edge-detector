@@ -6,9 +6,9 @@ import os
 import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
-import torchvision
+# import torchvision
 
-from utils.helpers import take_items
+from utils.helpers import coord_to_mask, take_items
 
 ID_FILE = "{folder_id}_ids.txt"
 TIME_FILE = "{folder_id}_time.json"
@@ -20,45 +20,45 @@ DRGB_FILE = "{frame_id}_depth.png"
 
 class FurrowDataset(Dataset):
 
-    def __init__(self, datapath, **kwargs):
-        self.datapath = datapath
-        self.validate_datapath()
-        
-        self.load_darr = kwargs.get("load_darr", True)
-        self.load_edge = kwargs.get("load_edge", True)
-        self.load_rgb = kwargs.get("load_rgb", False)
-        self.load_drgb = kwargs.get("load_drgb", False)
-        self.load_time = kwargs.get("load_time", False)
+    def __init__(self, data_args):
+        self.data_args = data_args
+        self.validate_data_path()
         
         self.frame_ids = []
         self.timestamps = {}
         self.size = 0
         
-        start = kwargs.get("start", 0)
-        end = kwargs.get("end", np.inf)
-        max_frames = kwargs.get("max_frames", np.inf)
+        start = data_args.get("start", 0)
+        end = data_args.get("end", np.inf)
+        max_frames = data_args.get("max_frames", np.inf)
         self.read_frame_metadata()
         self.take_frames(start, end, max_frames)
 
-    def validate_datapath(self):
-        files = os.listdir(self.datapath)
+    def get_args(self):
+        return self.data_args
+
+    def validate_data_path(self):
+        data_path = self.data_args['data_path']
+        files = os.listdir(data_path)
         for file in files:
-            file_path = os.path.join(self.datapath, file)
+            file_path = os.path.join(data_path, file)
             assert os.path.isfile(file_path), f"{file_path} is not a file!"
             assert file.endswith(("ids.txt", "depth.npy", "pts.npy", "rgb.png", "depth.png", "vis.png", "time.json")),\
                 f"{file} has an unknown extension!"
 
     def read_frame_metadata(self):
         """Read file ids and timestamps under a single-folder dataset containing frames."""
-        folder_id = os.path.basename(self.datapath)
+        data_path = self.data_args['data_path']
+        load_time = self.data_args.get("load_time", False)
+        folder_id = os.path.basename(data_path)
 
         file = ID_FILE.format(folder_id=folder_id)
-        path = os.path.join(self.datapath, file)
+        path = os.path.join(data_path, file)
         self.frame_ids = np.sort(np.loadtxt(path).astype(np.int64))
 
-        if self.load_time:
+        if load_time:
             file = TIME_FILE.format(folder_id=folder_id)
-            path = os.path.join(self.datapath, file)
+            path = os.path.join(data_path, file)
             with open(path) as f:
                 self.timestamps = json.load(f)
 
@@ -71,60 +71,76 @@ class FurrowDataset(Dataset):
         return len(self.frame_ids)
 
     def __getitem__(self, idx):
+        data_path = self.data_args['data_path']
+        shape = self.data_args.get("shape", (480, 640))
+        load_darr = self.data_args.get("load_darr", True)
+        load_edge = self.data_args.get("load_edge", True)
+        load_rgb = self.data_args.get("load_rgb", False)
+        load_drgb = self.data_args.get("load_drgb", False)
+        load_time = self.data_args.get("load_time", False)
+        
         frame_id = self.frame_ids[idx]
         
         item = {
             'frame_id': frame_id,
             'depth_arr': None,
-            'edge_pixels': None,
+            'edge_mask': None,
             'rgb_img': None,
             'depth_img': None,
             'time': None
         }
 
-        if self.load_darr:
+        if load_darr:
             darr_file = DEPTH_FILE.format(frame_id=frame_id)
-            darr_path = os.path.join(self.datapath, darr_file)
+            darr_path = os.path.join(data_path, darr_file)
             depth_arr = np.load(darr_path)
             item['depth_arr'] = depth_arr
             
-        if self.load_edge:
+        if load_edge:
             edge_file = EDGE_FILE.format(frame_id=frame_id)
-            edge_path = os.path.join(self.datapath, edge_file)
+            edge_path = os.path.join(data_path, edge_file)
             edge_pixels = np.load(edge_path)
-            item['edge_pixels'] = edge_pixels
+            edge_mask = coord_to_mask(shape, edge_pixels)
+            item['edge_mask'] = edge_mask
         
-        if self.load_rgb:
+        if load_rgb:
             rgb_file = RGB_FILE.format(frame_id=frame_id)
-            rgb_path = os.path.join(self.datapath, rgb_file)
+            rgb_path = os.path.join(data_path, rgb_file)
             rgb_img = Image.open(rgb_path)
             item['rgb_img'] = rgb_img
         
-        if self.load_drgb:
+        if load_drgb:
             drgb_file = DRGB_FILE.format(frame_id=frame_id)
-            drgb_path = os.path.join(self.datapath, drgb_file)
+            drgb_path = os.path.join(data_path, drgb_file)
             depth_img = Image.open(drgb_path)
             item['depth_img'] = depth_img
 
-        if self.load_time:
+        if load_time:
             item['time'] = self.timestamps[str(frame_id)]
 
         return item
 
     def __str__(self):
+        data_path = self.data_args['data_path']
+        load_darr = self.data_args.get("load_darr", True)
+        load_edge = self.data_args.get("load_edge", True)
+        load_rgb = self.data_args.get("load_rgb", False)
+        load_drgb = self.data_args.get("load_drgb", False)
+        load_time = self.data_args.get("load_time", False)
+        
         info = "Status of dataset:\n"+\
-               f"* Dataset path: {self.datapath}\n"+\
+               f"* Dataset path: {data_path}\n"+\
                f"* Number of frames: {len(self.frame_ids)}\n"+\
-               f"* Load depth arrays: {self.load_darr}\n"+\
-               f"* Load edge coordinates: {self.load_edge}\n"+\
-               f"* Load RGBs: {self.load_rgb}\n"+\
-               f"* Load depth RGB files: {self.load_drgb}\n"+\
-               f"* Load timestamps: {self.load_time}\n"
+               f"* Load depth arrays: {load_darr}\n"+\
+               f"* Load edge coordinates: {load_edge}\n"+\
+               f"* Load RGBs: {load_rgb}\n"+\
+               f"* Load depth RGB files: {load_drgb}\n"+\
+               f"* Load timestamps: {load_time}\n"
         return info
 
 def main():
-    datapath = "dataset/20201112_140127"
-    args = {
+    data_args = {
+        "data_path": "dataset/20201112_140127",
         "load_darr": True,
         "load_edge": False,
         "load_rgb": False,
@@ -135,7 +151,7 @@ def main():
         "max_frames": np.inf,
     }
     
-    dataset = FurrowDataset(datapath, **args)
+    dataset = FurrowDataset(data_args)
     print(dataset)
     print(dataset.frame_ids)
     size = len(dataset)
@@ -149,24 +165,23 @@ def main():
     print(f"Random Index: {rand_idx} <-> Frame ID: {frame_id}")
 
     shape = (480, 640)
-    if args["load_darr"]:
+    if data_args["load_darr"]:
         depth_arr = np.array(item['depth_arr'])
         print(f"Depth array shape: {depth_arr.shape}")
 
-    if args["load_edge"]:
-        edge_pixels = item['edge_pixels']
-        mask = coord_to_mask(shape, edge_pixels)
-        show_image(mask, cmap="gray")
+    if data_args["load_edge"]:
+        edge_mask = item['edge_mask']
+        show_image(edge_mask, cmap="gray")
 
-    if args["load_rgb"]:
+    if data_args["load_rgb"]:
         rgb_img = np.array(item['rgb_img'])
         show_image(rgb_img)
 
-    if args["load_drgb"]:
+    if data_args["load_drgb"]:
         depth_img = np.array(item['depth_img'])
         show_image(depth_img)
 
-    if args["load_time"]:
+    if data_args["load_time"]:
         time = np.array(item['time'])
         print(f"Timestamp: {time}")
 

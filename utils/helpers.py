@@ -2,14 +2,49 @@
 # Define general purpose methods to here.
 
 import json
+import os
 
 import cv2
 from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd 
 from pprint import pprint
+import torch
 from scipy.cluster.hierarchy import dendrogram
 from sklearn.cluster import AgglomerativeClustering
+
+from src.model import RidgeDetector
+
+def save_checkpoint(ckpt_path, epoch, model, optim, loss=None, acc=None):
+    checkpoint = { 
+        'epoch': epoch,
+        'loss': loss,
+        'accuracy': acc,
+        'model_args': model.get_args(),
+        'model_state': model.state_dict(),
+        'optim_args': optim.defaults,
+        'optim_state': optim.state_dict(),
+    }
+    file = f'{epoch}_ckpt.pth'
+    path = os.path.join(ckpt_path, file)
+    torch.save(checkpoint, path)
+
+def load_checkpoint(self, ckpt_path):
+    checkpoint = torch.load(ckpt_path)
+    last_epoch = checkpoint["epoch"]
+    last_loss = checkpoint["loss"]
+    last_acc = checkpoint["accuracy"]
+    
+    # Architecture is reinstantiated based on args saved
+    model = RidgeDetector(checkpoint['model_args'])
+    # Recover state
+    model.load_state_dict(checkpoint['model_state'])
+    # Optimizer is reinstantiated based on args saved
+    optim = torch.optim(filter(lambda p: p.requires_grad, model.parameters()), **checkpoint['optim_args'])
+    # Recover state
+    optim.load_state_dict(checkpoint['optim_state'])
+
+    return last_epoch, last_loss, last_acc, model, optim
 
 def topk(arr, k, largest=True):
     """Find top k elements in D dimensional array and returns values (k,) and indices (kxD)"""

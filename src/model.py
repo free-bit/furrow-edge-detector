@@ -3,10 +3,11 @@ import torch.nn as nn
 from torchvision.models import vgg16, resnet18
 
 class RidgeDetector(nn.Module):
-    def __init__(self, fuse=False, pretrained=True):
+    def __init__(self, model_args):
         super().__init__()
-        layers = vgg16(pretrained=pretrained).features
-        self.fuse = fuse
+
+        layers = vgg16(pretrained=model_args['pretrained']).features
+        self.model_args = model_args
 
         # Stage-1: Layers 0-3
         self.stage1 = layers[0:4]
@@ -39,9 +40,12 @@ class RidgeDetector(nn.Module):
             nn.Upsample(scale_factor=16, mode="bilinear", align_corners=False)
         )
         # Optional: Fuse side outputs from 5 stages at the end
-        if self.fuse:
+        if model_args['fuse']:
             self.fuse = nn.Conv2d(in_channels=5, out_channels=1, kernel_size=1, stride=1, padding=0)
-    
+
+    def get_args(self):
+        return self.model_args
+
     def forward(self, x):
         # x: NxCxHxW -> y: NxCxHxW -> sideouts: 5xNxCxHxW
 
@@ -62,7 +66,7 @@ class RidgeDetector(nn.Module):
 
         y = [y1, y2, y3, y4, y5]
 
-        if self.fuse:
+        if self.model_args['fuse']:
             y = self.fuse(torch.cat(y, dim=1))
         
         return y
