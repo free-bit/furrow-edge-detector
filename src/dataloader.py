@@ -6,7 +6,8 @@ import os
 import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
-# import torchvision
+from torchvision import transforms
+from torchvision.transforms import functional as F
 
 from utils.helpers import coord_to_mask, take_items
 
@@ -18,11 +19,27 @@ EDGE_FILE = "{frame_id}_edge_pts.npy"
 RGB_FILE = "{frame_id}_rgb.png"
 DRGB_FILE = "{frame_id}_depth.png"
 
+T_MAP = {
+    "affine": F.affine,
+    "center_crop": F.center_crop,
+    "gaussian_blur": F.gaussian_blur,
+    "normalize": F.normalize,
+    "resize": F.resize,
+    "rotate": F.rotate,
+    "to_tensor": F.to_tensor,
+}
+
 class FurrowDataset(Dataset):
 
     def __init__(self, data_args):
         self.data_args = data_args
         self.validate_data_path()
+
+        t_list = []
+        t_ids = self.data_args["transforms"]
+        for t_id in t_ids:
+            t_list.append(T_MAP[t_id])
+        self.transforms = transforms.Compose(t_list)
         
         self.frame_ids = []
         self.timestamps = {}
@@ -32,10 +49,18 @@ class FurrowDataset(Dataset):
         end = data_args.get("end", np.inf)
         max_frames = data_args.get("max_frames", np.inf)
         self.read_frame_metadata()
+        self.frame_count = len(self.frame_ids)
         self.take_frames(start, end, max_frames)
 
     def get_args(self):
         return self.data_args
+
+    def save_args(self, save_path):
+        if not os.path.splitext(save_path)[-1]:
+            save_path = save_path + ".json"
+
+        with open(save_path, "w") as file:
+            json.dump(self.data_args, file, indent=4)
 
     def validate_data_path(self):
         data_path = self.data_args['data_path']
@@ -83,37 +108,38 @@ class FurrowDataset(Dataset):
         
         item = {
             'frame_id': frame_id,
-            'depth_arr': None,
-            'edge_mask': None,
-            'rgb_img': None,
-            'depth_img': None,
-            'time': None
+            # 'depth_arr'
+            # 'edge_mask'
+            # 'rgb_img'
+            # 'depth_img'
+            # 'time'
         }
 
         if load_darr:
             darr_file = DEPTH_FILE.format(frame_id=frame_id)
             darr_path = os.path.join(data_path, darr_file)
             depth_arr = np.load(darr_path)
-            item['depth_arr'] = depth_arr
+            depth_arr = Image.fromarray(depth_arr).convert('RGB') # TODO: This might be made optional
+            item['depth_arr'] = self.transforms(depth_arr)
             
         if load_edge:
             edge_file = EDGE_FILE.format(frame_id=frame_id)
             edge_path = os.path.join(data_path, edge_file)
             edge_pixels = np.load(edge_path)
             edge_mask = coord_to_mask(shape, edge_pixels)
-            item['edge_mask'] = edge_mask
+            item['edge_mask'] = self.transforms(edge_mask)
         
         if load_rgb:
             rgb_file = RGB_FILE.format(frame_id=frame_id)
             rgb_path = os.path.join(data_path, rgb_file)
             rgb_img = Image.open(rgb_path)
-            item['rgb_img'] = rgb_img
+            item['rgb_img'] = self.transforms(rgb_img)
         
         if load_drgb:
             drgb_file = DRGB_FILE.format(frame_id=frame_id)
             drgb_path = os.path.join(data_path, drgb_file)
             depth_img = Image.open(drgb_path)
-            item['depth_img'] = depth_img
+            item['depth_img'] = self.transforms(depth_img)
 
         if load_time:
             item['time'] = self.timestamps[str(frame_id)]
@@ -130,13 +156,21 @@ class FurrowDataset(Dataset):
         
         info = "Status of dataset:\n"+\
                f"* Dataset path: {data_path}\n"+\
-               f"* Number of frames: {len(self.frame_ids)}\n"+\
+               f"* Number of frames: Fetched/Total: {len(self.frame_ids)}/{self.frame_count}\n"+\
                f"* Load depth arrays: {load_darr}\n"+\
                f"* Load edge coordinates: {load_edge}\n"+\
                f"* Load RGBs: {load_rgb}\n"+\
                f"* Load depth RGB files: {load_drgb}\n"+\
                f"* Load timestamps: {load_time}\n"
         return info
+
+    @staticmethod
+    def split_item(item):
+        depth_arr = item.get("depth_arr", None)
+        edge_mask = item.get("edge_mask", None)
+        rgb_img = item.get("rgb_img", None)
+        depth_img = item.get("depth_img", None)
+        return depth_arr, edge_mask, rgb_img, depth_img
 
 def main():
     data_args = {

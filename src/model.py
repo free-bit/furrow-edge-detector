@@ -9,6 +9,12 @@ class RidgeDetector(nn.Module):
         layers = vgg16(pretrained=model_args['pretrained']).features
         self.model_args = model_args
 
+        # TODO: Handle different possibilities for C of x: 
+        # *Depth    -> 1 -> Copy input, convert to RGB, reduce conv layer or insert a new conv layer 
+        # RGB/DRGB -> 3 -> Use it as it is
+        # RGB+D    -> 4 -> 
+        # RGB+DRGB -> 6 -> 
+
         # Stage-1: Layers 0-3
         self.stage1 = layers[0:4]
         self.sideout1 = nn.Sequential(
