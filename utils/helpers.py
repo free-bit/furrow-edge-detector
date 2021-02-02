@@ -47,7 +47,7 @@ def load_checkpoint(self, ckpt_path):
     return last_epoch, last_loss, last_acc, model, optim
 
 def topk(arr, k, largest=True):
-    """Find top k elements in D dimensional array and returns values (k,) and indices (kxD)"""
+    """Find top k elements in D dimensional array and return values (k,) and indices (kxD)"""
     assert k > 0, "k({}) has to be positive.".format(k)
     flat_arr = np.ravel(arr)
     # np.argsort sorts in ascending order, take last n elements in reverse order
@@ -59,7 +59,8 @@ def topk(arr, k, largest=True):
     top_vals = arr[top_idxs]
     return (top_vals, np.array(list(zip(*top_idxs))))
 
-def take_items(items, start, end, n=np.inf):
+def take_items(items, start=0, end=np.inf, n=np.inf):
+    """Take n items from the specified slice (start,end) and return list of numpy.array or torch.tensor"""
     size = len(items)
 
     if start < 0:
@@ -75,7 +76,7 @@ def take_items(items, start, end, n=np.inf):
     size = len(items)
     
     if n >= size:
-        return items
+        return list(items)
     
     # Divide items into n splits take one item from each part
     splits = np.array_split(items, n)

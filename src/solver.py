@@ -5,11 +5,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+from torchvision.utils import make_grid
 from time import time
 from tqdm.auto import tqdm
 
 from src.dataloader import FurrowDataset
-from utils.helpers import save_checkpoint, load_checkpoint
+from utils.helpers import save_checkpoint, take_items
 
 # TODO: 
 # Debug
@@ -29,10 +30,82 @@ def interrupt_handler(signum, frame):
 
 signal.signal(signal.SIGINT, interrupt_handler)
 
+def class_balanced_bce(logits, targets):
+    total = np.prod(targets.shape[2:4])                      # total pixel count: scalar
+    pos_count = torch.sum(targets, dim=(2,3), keepdim=True)  # + count per image: Nx1x1x1
+    neg_count = total - pos_count                            # - count per image: Nx1x1x1
+    pos_weights = targets * (neg_count / pos_count)          # b / (1 - b) term:  Nx1xHxW
+    weights = torch.ones_like(targets) * (pos_count / total) # (1 - b) term:      Nx1xHxW
+
+    # BCE with Logits == Sigmoid(Logits) + Weighted BCE:
+    # weights * [pos_weights * y * -log(sigmoid(logits)) + (1 - y) * -log(1 - sigmoid(x))]
+    # 'mean' reduction does the followings:
+    # 1) avg loss of pixels for each image
+    # 2) avg loss of images in the batch
+    loss = F.binary_cross_entropy_with_logits(logits, targets, 
+                                              weight=weights, 
+                                              pos_weight=pos_weights, 
+                                              reduction='mean')
+
+    return loss
+
+def f1_score(logits, targets, threshold=0.5):
+    preds = torch.sigmoid(logits) > threshold
+    
+    tp = (preds.bool() * targets.bool()).sum(dim=(2,3))
+    fp = (preds.bool() * ~targets.bool()).sum(dim=(2,3))
+    tn = (~preds.bool() * ~targets.bool()).sum(dim=(2,3))
+    
+    precision = tp / (tp + fp)
+    recall = tp / (tp + tn)
+    f1 = (2 * precision * recall) / (precision + recall)
+
+    f1[f1 != f1] = 0 # nan -> 0 TODO: Change when not needed
+
+    return f1.mean()
+
+def prepare_batch_visualization(pred_batch, target_batch, start=0, end=np.inf, max_items=3):
+    with torch.no_grad():
+        pred_batch = pred_batch.detach().cpu()
+        target_batch = target_batch.detach().cpu()
+
+        # In case of a single image add one dimension to the beginning to create single image batch
+        if len(pred_batch.shape) == 3:
+            pred_batch = pred_batch.unsqueeze(0)
+            target_batch = target_batch.unsqueeze(0)
+
+        if len(pred_batch.shape) != 4:
+            print("Warning: Only 3D or 4D tensors can be visualized")
+            return torch.Tensor()
+
+        # If take the specified portion of the batch
+        pred_batch = torch.stack(take_items(pred_batch, start, end, max_items), dim=0)
+        target_batch = torch.stack(take_items(target_batch, start, end, max_items), dim=0)
+
+        # Construct stack of interleaving images: (2*B)xCxHxW
+        zipped = torch.stack((pred_batch, target_batch), dim=1)
+        zipped = torch.reshape(zipped, (-1, *pred_batch.shape[1:4]))
+
+        # Per row, pick 2 images from the stack
+        img_grid = make_grid(zipped, nrow=2)
+
+        return img_grid
+
+LOSSES = {
+    "bce": F.binary_cross_entropy_with_logits, 
+    "class_balanced_bce": class_balanced_bce,
+}
+
+METRICS = {
+    "f1": f1_score
+}
+
 class Solver(object):
     def __init__(self, solver_args):
-        # self.loss_func = solver_args["loss_func"]
-        # self.metric_func = solver_args["metric_func"]
+        loss_id = solver_args["loss_func"]
+        metric_id = solver_args["metric_func"]
+        self.loss_func = LOSSES[loss_id]
+        self.metric_func = METRICS[metric_id]
         self.device = solver_args["device"]
         self.writer = SummaryWriter(solver_args["log_path"])
         self.clear_history()
@@ -47,117 +120,65 @@ class Solver(object):
         self.val_loss_hist = []
         self.val_metric_hist = []
 
-    def class_balanced_bce(self, logits, targets):
-        total = np.prod(targets.shape[2:4])                      # total pixel count: scalar
-        pos_count = torch.sum(targets, dim=(2,3), keepdim=True)  # + count per image: Nx1x1x1
-        neg_count = total - pos_count                            # - count per image: Nx1x1x1
-        pos_weights = targets * (neg_count / pos_count)          # b / (1 - b) term:  Nx1xHxW
-        weights = torch.ones_like(targets) * (pos_count / total) # (1 - b) term:      Nx1xHxW
-
-        # BCE with Logits == Sigmoid(Logits) + Weighted BCE:
-        # weights * [pos_weights * y * -log(sigmoid(logits)) + (1 - y) * -log(1 - sigmoid(x))]
-        # 'mean' reduction does the followings:
-        # 1) avg loss of pixels for each image
-        # 2) avg loss of images in the batch
-        loss = F.binary_cross_entropy_with_logits(logits, targets, 
-                                                  weight=weights, 
-                                                  pos_weight=pos_weights, 
-                                                  reduction='mean')
-
-        return loss
-
-    def f1_score(self, logits, targets, threshold=0.5):
-        preds = torch.sigmoid(logits) > threshold
-        
-        tp = (preds.bool() * targets.bool()).sum(dim=(2,3))
-        fp = (preds.bool() * ~targets.bool()).sum(dim=(2,3))
-        tn = (~preds.bool() * ~targets.bool()).sum(dim=(2,3))
-        
-        precision = tp / (tp + fp)
-        recall = tp / (tp + tn)
-        f1 = (2 * precision * recall) / (precision + recall)
-
-        f1[f1 != f1] = 0 # nan -> 0 TODO: Change when not needed
-    
-        return f1.mean()
-
-    # TODO: forward method has to adaptive select the inputs to pass (dataset args have to read here)
-    def forward(self, model, batch):
-        # depth_img: Nx3xHxW, depth_arr: Nx1xHxW, targets: Nx1xHxW
-        depth_arr, edge_mask, rgb_img, depth_img = FurrowDataset.split_item(batch)
-        X = depth_arr.to(self.device)
-        # X = rgb_img.to(self.device)
-        # X = depth_img.to(self.device)
-        targets = edge_mask.to(self.device)
+    def forward(self, model, X, targets):
+        # X: Bx1xHxW | Bx3xHxW | Bx4xHxW | Bx6xHxW
+        # targets: Bx1xHxW
         logits = model(X)
-        
-        loss = self.class_balanced_bce(logits, targets) # Single loss value (averaged over batch)
-        metric = self.f1_score(logits, targets)         # Single metric score (averaged over batch)
+        # preds = torch.sigmoid(logits)
+        loss = self.loss_func(logits, targets)     # Single loss value (averaged over batch)
+        metric = self.metric_func(logits, targets) # Single metric score (averaged over batch)
 
-        return loss, metric
+        return logits, loss, metric
 
     def backward(self, optim, loss):
         loss.backward()
         optim.step()
         optim.zero_grad()
 
-    def train_one_epoch(self, model, optim, train_loader, epoch, log_freq):
-        model.train()
+    def run_one_epoch(self, epoch, loader, model, optim=None, log_freq=0, vis_freq=0):
+        mode = "Train" if model.training else 'Validation'
 
-        total_iter = len(train_loader)
-        train_losses = []
-        train_metrics = []
+        total_iter = len(loader)
+        offset = (epoch-1) * total_iter
+        losses = []
+        metrics = []
         
         # iter: [1, total_iter]
-        for iter, batch in enumerate(tqdm(train_loader), 1):
-            train_loss, train_metric = self.forward(model, batch)
-            self.backward(optim, train_loss)
+        for iter, batch in enumerate(tqdm(loader), 1):
+            depth_arr, edge_mask, rgb_img, depth_img = FurrowDataset.split_item(batch)
+            X = depth_arr.to(self.device)
+            # X = rgb_img.to(self.device)
+            # X = depth_img.to(self.device)
+            targets = edge_mask.to(self.device)
+            logits, loss, metric = self.forward(model, X, targets) # TODO: adaptively select the inputs to pass (dataset args have to read here)
+            if model.training:
+                self.backward(optim, loss)
 
-            train_loss = train_loss.item()     # Tensor -> float
-            train_metric = train_metric.item() # Tensor -> float
-            train_losses.append(train_loss)
-            train_metrics.append(train_metric)
+            loss = loss.item()     # Tensor -> float
+            metric = metric.item() # Tensor -> float
+            losses.append(loss)
+            metrics.append(metric)
 
-            self.writer.add_scalar('Batch/Loss/Train', train_loss, iter + (epoch-1) * total_iter)
-            self.writer.add_scalar('Batch/Metric/Train', train_metric, iter + (epoch-1) * total_iter)
+            global_iter = iter + offset
+            self.writer.add_scalar(f'Batch/Loss/{mode}', loss, global_iter)
+            self.writer.add_scalar(f'Batch/Metric/{mode}', metric, global_iter)
             self.writer.flush()
 
             if log_freq > 0 and iter % log_freq == 0:
-                print(f"[Iteration {iter}/{total_iter}] Train loss/metric: {train_loss:.5f}/{train_metric:.5f}")
-    
-        mean_train_loss = np.mean(train_losses)
-        mean_train_metric = np.mean(train_metrics)
+                print(f"[Iteration {iter}/{total_iter}] {mode} loss/metric: {loss:.5f}/{metric:.5f}")
 
-        return mean_train_loss, mean_train_metric
-
-    def validate_one_epoch(self, model, val_loader, epoch, log_freq=0):
-        model.eval()
-
-        with torch.no_grad():
-            total_iter = len(val_loader)
-            val_losses = []
-            val_metrics = []
-
-            # iter: [1, total_iter]
-            for iter, batch in enumerate(tqdm(val_loader), 1):
-                val_loss, val_metric = self.forward(model, batch)
-                
-                val_loss = val_loss.item()     # Tensor -> float
-                val_metric = val_metric.item() # Tensor -> float
-                val_losses.append(val_loss)
-                val_metrics.append(val_metric)
-
-                self.writer.add_scalar('Batch/Loss/Val', val_loss, iter + (epoch-1) * total_iter)
-                self.writer.add_scalar('Batch/Metric/Val', val_metric, iter + (epoch-1) * total_iter)
+            if vis_freq > 0 and iter % vis_freq == 0:
+                preds = torch.sigmoid(logits)
+                img_grid = prepare_batch_visualization(preds, targets)
+                # NOTE: add_image method expects image values in range [0,1]
+                self.writer.add_image(f"{mode}", img_grid, global_step=global_iter)
                 self.writer.flush()
 
-                if log_freq > 0 and iter % log_freq == 0:
-                    print(f"[Iteration {iter}/{total_iter}] Val loss/metric: {val_loss:.5f}/{val_metric:.5f}")
+    
+        mean_loss = np.mean(losses)
+        mean_metric = np.mean(metrics)
 
-            mean_val_loss = np.mean(val_losses)
-            mean_val_metric = np.mean(val_metrics)
-
-        return mean_val_loss, mean_val_metric
+        return mean_loss, mean_metric
 
     def train(self, model, optim, train_loader, val_loader, train_args):
         model.to(self.device)
@@ -165,6 +186,7 @@ class Solver(object):
         max_epochs = train_args.get('max_epochs', 10)
         val_freq = train_args.get('val_freq', 1)
         log_freq = train_args.get('log_freq', 0)
+        vis_freq = train_args.get('vis_freq', 0)
         ckpt_freq = train_args.get('ckpt_freq', 0)
         
         best_loss = np.inf
@@ -174,7 +196,8 @@ class Solver(object):
         epoch = 0
         for epoch in range(1, max_epochs+1):
             # Perform a full pass over training data
-            mean_train_loss, mean_train_metric = self.train_one_epoch(model, optim, train_loader, epoch, log_freq)
+            model.train()
+            mean_train_loss, mean_train_metric = self.run_one_epoch(epoch, train_loader, model, optim, log_freq=log_freq, vis_freq=vis_freq)
 
             print(f"[Epoch {epoch}/{max_epochs}] Train mean loss/metric: {mean_train_loss:.5f}/{mean_train_metric:.5f}")
 
@@ -189,16 +212,18 @@ class Solver(object):
             mean_val_loss = np.inf
             mean_val_metric = -1
             if val_freq > 0 and epoch % val_freq == 0:
-                mean_val_loss, mean_val_metric = self.validate_one_epoch(model, val_loader, epoch, log_freq)
-                
-                print(f"[Epoch {epoch}/{max_epochs}] Val mean loss/metric: {mean_val_loss:.5f}/{mean_val_metric:.5f}")
+                model.eval()
+                with torch.no_grad():
+                    mean_val_loss, mean_val_metric = self.run_one_epoch(epoch, val_loader, model, log_freq=log_freq, vis_freq=vis_freq)
+                    
+                    print(f"[Epoch {epoch}/{max_epochs}] Validation mean loss/metric: {mean_val_loss:.5f}/{mean_val_metric:.5f}")
 
-                self.val_loss_hist.append(mean_val_loss)
-                self.val_metric_hist.append(mean_val_metric)
+                    self.val_loss_hist.append(mean_val_loss)
+                    self.val_metric_hist.append(mean_val_metric)
 
-                self.writer.add_scalar('Epoch/Loss/Val', mean_val_loss, epoch)
-                self.writer.add_scalar('Epoch/Metric/Val', mean_val_metric, epoch)
-                self.writer.flush()
+                    self.writer.add_scalar('Epoch/Loss/Validation', mean_val_loss, epoch)
+                    self.writer.add_scalar('Epoch/Metric/Validation', mean_val_metric, epoch)
+                    self.writer.flush()
 
             # Checkpoint is disabled for ckpt_freq <= 0
             make_ckpt = False
@@ -213,14 +238,6 @@ class Solver(object):
             # When KeyboardInterrupt is triggered, perform a controlled termination
             if EXIT:
                 break
-
-        # self.writer.add_hparams(self.hparam_dict, {
-        #     'HParam/Metric/Val': self.val_metric_hist[-1],
-        #     'HParam/Metric/Train': self.train_metric_hist[-1],
-        #     'HParam/Loss/Val': self.val_loss_hist[-1],
-        #     'HParam/Loss/Train': self.train_loss_hist[-1]
-        # })
-        # self.writer.flush()
 
     def test(self, model, test_loader):
         model.to(self.device)
@@ -237,8 +254,12 @@ class Solver(object):
 
     def __str__(self):
         device = self.solver_args["device"]
+        loss_func = self.solver_args["loss_func"]
+        metric_func = self.solver_args["metric_func"]
         log_path = self.solver_args["log_path"]
         info = "Status of solver:\n"+\
                f"* Device: {device}\n"+\
+               f"* Loss function: {loss_func}\n"+\
+               f"* Metric function: {metric_func}\n"+\
                f"* Log path: {log_path}\n"
         return info

@@ -6,7 +6,7 @@ import os
 import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
-from torchvision import transforms
+from torchvision import transforms as T
 from torchvision.transforms import functional as F
 
 from utils.helpers import coord_to_mask, take_items
@@ -23,10 +23,10 @@ T_MAP = {
     "affine": F.affine,
     "center_crop": F.center_crop,
     "gaussian_blur": F.gaussian_blur,
-    "normalize": F.normalize,
+    "normalize": T.Lambda(lambda x: F.normalize(x, mean=0.5, std=0.5)), # Pixel values in range: [-1,1]
     "resize": F.resize,
     "rotate": F.rotate,
-    "to_tensor": F.to_tensor,
+    "to_tensor": F.to_tensor, # Pixel values in range: [0,1]
 }
 
 class FurrowDataset(Dataset):
@@ -39,7 +39,7 @@ class FurrowDataset(Dataset):
         t_ids = self.data_args["transforms"]
         for t_id in t_ids:
             t_list.append(T_MAP[t_id])
-        self.transforms = transforms.Compose(t_list)
+        self.transforms = T.Compose(t_list)
         
         self.frame_ids = []
         self.timestamps = {}
@@ -118,27 +118,28 @@ class FurrowDataset(Dataset):
         if load_darr:
             darr_file = DEPTH_FILE.format(frame_id=frame_id)
             darr_path = os.path.join(data_path, darr_file)
-            depth_arr = np.load(darr_path)
-            depth_arr = Image.fromarray(depth_arr).convert('RGB') # TODO: This might be made optional
+            depth_arr = np.load(darr_path) # np.float64
+            depth_arr = 255 * (depth_arr / depth_arr.max()) # Expand range to [0, 255]
+            depth_arr = Image.fromarray(depth_arr).convert('RGB') # np.uint8 TODO: This might be made optional
             item['depth_arr'] = self.transforms(depth_arr)
             
         if load_edge:
             edge_file = EDGE_FILE.format(frame_id=frame_id)
             edge_path = os.path.join(data_path, edge_file)
             edge_pixels = np.load(edge_path)
-            edge_mask = coord_to_mask(shape, edge_pixels)
+            edge_mask = coord_to_mask(shape, edge_pixels) # np.uin8
             item['edge_mask'] = self.transforms(edge_mask)
         
         if load_rgb:
             rgb_file = RGB_FILE.format(frame_id=frame_id)
             rgb_path = os.path.join(data_path, rgb_file)
-            rgb_img = Image.open(rgb_path)
+            rgb_img = Image.open(rgb_path) # np.uin8
             item['rgb_img'] = self.transforms(rgb_img)
         
         if load_drgb:
             drgb_file = DRGB_FILE.format(frame_id=frame_id)
             drgb_path = os.path.join(data_path, drgb_file)
-            depth_img = Image.open(drgb_path)
+            depth_img = Image.open(drgb_path) # np.uin8
             item['depth_img'] = self.transforms(depth_img)
 
         if load_time:
