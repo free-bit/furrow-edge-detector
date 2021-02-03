@@ -64,6 +64,7 @@ def f1_score(logits, targets, threshold=0.5):
 
     return f1.mean()
 
+# TODO: Number of images in a row should be an arg.
 def prepare_batch_visualization(pred_batch, target_batch, start=0, end=np.inf, max_items=3):
     with torch.no_grad():
         pred_batch = pred_batch.detach().cpu()
@@ -135,7 +136,7 @@ class Solver(object):
         optim.step()
         optim.zero_grad()
 
-    def run_one_epoch(self, epoch, loader, model, optim=None, log_freq=0, vis_freq=0):
+    def run_one_epoch(self, epoch, loader, model, optim=None, log_freq=0, vis_freq=0, max_vis=5):
         mode = "Train" if model.training else 'Validation'
 
         total_iter = len(loader)
@@ -169,9 +170,8 @@ class Solver(object):
 
             if vis_freq > 0 and iter % vis_freq == 0:
                 preds = torch.sigmoid(logits)
-                img_grid = prepare_batch_visualization(preds, targets)
-                # NOTE: add_image method expects image values in range [0,1]
-                self.writer.add_image(f"{mode}", img_grid, global_step=global_iter)
+                img_grid = prepare_batch_visualization(preds, targets, max_items=max_vis)
+                self.writer.add_image(f"{mode}", img_grid, global_step=global_iter) # NOTE: add_image method expects image values in range [0,1]
                 self.writer.flush()
 
     
@@ -243,14 +243,25 @@ class Solver(object):
         model.to(self.device)
         model.eval()
         
-        outputs = []
+        results = []
 
         with torch.no_grad():
-            for batch in tqdm(test_loader):
-                output = model(batch)
-                outputs.append(output)
+            for iter, batch in enumerate(tqdm(test_loader), 1):
+                # TODO: input selection
+                depth_arr, edge_mask, rgb_img, depth_img = FurrowDataset.split_item(batch)
+                X = depth_arr.to(self.device)
+                targets = edge_mask.to(self.device)
+                logits = model(X)
+                preds = torch.sigmoid(logits)
+                # preds = torch.sigmoid(logits) > 0.5
+                
+                img_grid = prepare_batch_visualization(preds, targets, max_items=np.inf)
+                self.writer.add_image("Test", img_grid, global_step=iter) # NOTE: add_image method expects image values in range [0,1]
+                self.writer.flush()
+
+                results.append(preds)
         
-        return outputs
+        return results
 
     def __str__(self):
         device = self.solver_args["device"]

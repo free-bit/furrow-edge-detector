@@ -35,11 +35,19 @@ class FurrowDataset(Dataset):
         self.data_args = data_args
         self.validate_data_path()
 
+        # Input transforms
         t_list = []
-        t_ids = self.data_args["transforms"]
+        t_ids = self.data_args["input_trans"]
         for t_id in t_ids:
             t_list.append(T_MAP[t_id])
-        self.transforms = T.Compose(t_list)
+        self.input_trans = T.Compose(t_list)
+        
+        # Output transforms
+        t_list = []
+        t_ids = self.data_args["output_trans"]
+        for t_id in t_ids:
+            t_list.append(T_MAP[t_id])
+        self.output_trans = T.Compose(t_list)
         
         self.frame_ids = []
         self.timestamps = {}
@@ -121,26 +129,26 @@ class FurrowDataset(Dataset):
             depth_arr = np.load(darr_path) # np.float64
             depth_arr = 255 * (depth_arr / depth_arr.max()) # Expand range to [0, 255]
             depth_arr = Image.fromarray(depth_arr).convert('RGB') # np.uint8 TODO: This might be made optional
-            item['depth_arr'] = self.transforms(depth_arr)
+            item['depth_arr'] = self.input_trans(depth_arr)
             
         if load_edge:
             edge_file = EDGE_FILE.format(frame_id=frame_id)
             edge_path = os.path.join(data_path, edge_file)
             edge_pixels = np.load(edge_path)
             edge_mask = coord_to_mask(shape, edge_pixels) # np.uin8
-            item['edge_mask'] = self.transforms(edge_mask)
+            item['edge_mask'] = self.output_trans(edge_mask)
         
         if load_rgb:
             rgb_file = RGB_FILE.format(frame_id=frame_id)
             rgb_path = os.path.join(data_path, rgb_file)
             rgb_img = Image.open(rgb_path) # np.uin8
-            item['rgb_img'] = self.transforms(rgb_img)
+            item['rgb_img'] = self.input_trans(rgb_img)
         
         if load_drgb:
             drgb_file = DRGB_FILE.format(frame_id=frame_id)
             drgb_path = os.path.join(data_path, drgb_file)
             depth_img = Image.open(drgb_path) # np.uin8
-            item['depth_img'] = self.transforms(depth_img)
+            item['depth_img'] = self.input_trans(depth_img)
 
         if load_time:
             item['time'] = self.timestamps[str(frame_id)]
