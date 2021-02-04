@@ -5,6 +5,7 @@ import os
 
 import numpy as np
 from PIL import Image
+import torch
 from torch.utils.data import Dataset
 from torchvision import transforms as T
 from torchvision.transforms import functional as F
@@ -174,12 +175,42 @@ class FurrowDataset(Dataset):
         return info
 
     @staticmethod
-    def split_item(item):
+    def split_item(item, input_format="darr"):
+        samples = {
+            'frame_ids': item['frame_id']
+        }
+
         depth_arr = item.get("depth_arr", None)
-        edge_mask = item.get("edge_mask", None)
         rgb_img = item.get("rgb_img", None)
         depth_img = item.get("depth_img", None)
-        return depth_arr, edge_mask, rgb_img, depth_img
+        
+        # Depth as array only (C:1)
+        if input_format is "darr":
+            samples['input'] = depth_arr
+
+        # RGB image only (C:3)
+        elif input_format is "rgb":
+            samples['input'] = rgb_img
+        
+        # Depth as image only  (C:3)
+        elif input_format is "drgb":
+            samples['input'] = depth_img
+        
+        # RGB + Depth as array (C:4)
+        elif input_format is "rgb-darr":
+            samples['input'] = torch.cat((rgb_img, depth_arr), dim=1)
+        
+        # RGB + Depth as image (C:6)
+        elif input_format is "rgb-drgb":
+            samples['input'] = torch.cat((rgb_img, depth_img), dim=1)
+
+        else:
+            raise NotImplementedError
+
+        edge_mask = item.get("edge_mask", None)
+        samples['gt'] = edge_mask
+
+        return samples
 
 def main():
     data_args = {

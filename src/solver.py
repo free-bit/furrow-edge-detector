@@ -64,31 +64,53 @@ def f1_score(logits, targets, threshold=0.5):
 
     return f1.mean()
 
-# TODO: Number of images in a row should be an arg.
-def prepare_batch_visualization(pred_batch, target_batch, start=0, end=np.inf, max_items=3):
+def prepare_batch_visualization(batch_groups, start=0, end=np.inf, max_items=3):
+    """Construct a grid from batch_groups (type: list). 
+    
+    Each individual batch group is a batch of images (type: tensor) is with shape: B x C* x H x W.
+    Order of individual batch group in batch_groups defines the order of images in columns.
+    Number of rows in the grid depends on number of images to take from each group (= max_items).
+    Number of columns in the grid depends on the size of batch_groups (= num_groups).
+    *Dimension C might be different for each batch in batch_groups. Smaller channels are promoted to maximum number of channels (= C_max).
+
+    Parameters
+    ----------
+    batch_groups : list 
+        Different groups of image batches e.g. [rgb_batch, darr_batch, pred_batch, mask_batch...]
+    start : int 
+        Start index for range
+    end : int
+        End index for range
+    max_items : int 
+        Number of items to take from range: [start, end]
+
+    Returns 
+    -------
+    img_grid : tensor 
+        Resulting grid with shape: (C_max) x (max_items * H + padding) x (num_groups * W + padding)
+    """
     with torch.no_grad():
-        pred_batch = pred_batch.detach().cpu()
-        target_batch = target_batch.detach().cpu()
+        num_batch_groups = len(batch_groups)
 
-        # In case of a single image add one dimension to the beginning to create single image batch
-        if len(pred_batch.shape) == 3:
-            pred_batch = pred_batch.unsqueeze(0)
-            target_batch = target_batch.unsqueeze(0)
+        # Determine C_max, send tensors to cpu while detaching from graph
+        C_max, shape = -1, None
+        for i in range(num_batch_groups):
+            shape = batch_groups[i].shape
+            C_max = shape[1] if shape[1] > C_max else C_max
+            batch_groups[i] = batch_groups[i].detach().cpu()
+        
+        # Take max_items from range: [start, end]
+        shape = (-1, C_max, *shape[2:4])
+        for i in range(num_batch_groups):
+            batch_groups[i] = torch.stack(take_items(batch_groups[i], start, end, max_items), dim=0)
+            batch_groups[i] = batch_groups[i].expand(shape) # Promote channels to the C_max
 
-        if len(pred_batch.shape) != 4:
-            print("Warning: Only 3D or 4D tensors can be visualized")
-            return torch.Tensor()
+        # Construct stack of interleaving batch_groups: (2*B)xCxHxW
+        zipped = torch.stack(batch_groups, dim=1)
+        zipped = torch.reshape(zipped, (-1, *shape[1:4]))
 
-        # If take the specified portion of the batch
-        pred_batch = torch.stack(take_items(pred_batch, start, end, max_items), dim=0)
-        target_batch = torch.stack(take_items(target_batch, start, end, max_items), dim=0)
-
-        # Construct stack of interleaving images: (2*B)xCxHxW
-        zipped = torch.stack((pred_batch, target_batch), dim=1)
-        zipped = torch.reshape(zipped, (-1, *pred_batch.shape[1:4]))
-
-        # Per row, pick 2 images from the stack
-        img_grid = make_grid(zipped, nrow=2)
+        # Construct a row taking one image from each image set
+        img_grid = make_grid(zipped, nrow=num_batch_groups, normalize=True, scale_each=True)
 
         return img_grid
 
@@ -136,7 +158,12 @@ class Solver(object):
         optim.step()
         optim.zero_grad()
 
-    def run_one_epoch(self, epoch, loader, model, optim=None, log_freq=0, vis_freq=0, max_vis=5):
+    def run_one_epoch(self, epoch, loader, model, 
+                      optim=None, 
+                      log_freq=0, 
+                      vis_freq=0, 
+                      max_vis=5,
+                      input_format='darr'):
         mode = "Train" if model.training else 'Validation'
 
         total_iter = len(loader)
@@ -146,12 +173,10 @@ class Solver(object):
         
         # iter: [1, total_iter]
         for iter, batch in enumerate(tqdm(loader), 1):
-            depth_arr, edge_mask, rgb_img, depth_img = FurrowDataset.split_item(batch)
-            X = depth_arr.to(self.device)
-            # X = rgb_img.to(self.device)
-            # X = depth_img.to(self.device)
-            targets = edge_mask.to(self.device)
-            logits, loss, metric = self.forward(model, X, targets) # TODO: adaptively select the inputs to pass (dataset args have to read here)
+            samples = FurrowDataset.split_item(batch, input_format=input_format)
+            X = samples['input'].to(self.device)
+            targets = samples['gt'].to(self.device)
+            logits, loss, metric = self.forward(model, X, targets)
             if model.training:
                 self.backward(optim, loss)
 
@@ -170,8 +195,8 @@ class Solver(object):
 
             if vis_freq > 0 and iter % vis_freq == 0:
                 preds = torch.sigmoid(logits)
-                img_grid = prepare_batch_visualization(preds, targets, max_items=max_vis)
-                self.writer.add_image(f"{mode}", img_grid, global_step=global_iter) # NOTE: add_image method expects image values in range [0,1]
+                img_grid = prepare_batch_visualization([samples['input'], preds, targets], max_items=max_vis)
+                self.writer.add_image(f"{mode}", img_grid, global_step=global_iter)
                 self.writer.flush()
 
     
@@ -182,12 +207,14 @@ class Solver(object):
 
     def train(self, model, optim, train_loader, val_loader, train_args):
         model.to(self.device)
+
         ckpt_path = train_args['ckpt_path']
         max_epochs = train_args.get('max_epochs', 10)
         val_freq = train_args.get('val_freq', 1)
         log_freq = train_args.get('log_freq', 0)
         vis_freq = train_args.get('vis_freq', 0)
         ckpt_freq = train_args.get('ckpt_freq', 0)
+        input_format = train_args.get('input_format', 'darr')
         
         best_loss = np.inf
         best_metric = -1
@@ -197,7 +224,9 @@ class Solver(object):
         for epoch in range(1, max_epochs+1):
             # Perform a full pass over training data
             model.train()
-            mean_train_loss, mean_train_metric = self.run_one_epoch(epoch, train_loader, model, optim, log_freq=log_freq, vis_freq=vis_freq)
+            mean_train_loss, mean_train_metric = self.run_one_epoch(epoch, train_loader, model, optim, 
+                                                                    log_freq=log_freq, vis_freq=vis_freq, 
+                                                                    input_format=input_format)
 
             print(f"[Epoch {epoch}/{max_epochs}] Train mean loss/metric: {mean_train_loss:.5f}/{mean_train_metric:.5f}")
 
@@ -214,7 +243,9 @@ class Solver(object):
             if val_freq > 0 and epoch % val_freq == 0:
                 model.eval()
                 with torch.no_grad():
-                    mean_val_loss, mean_val_metric = self.run_one_epoch(epoch, val_loader, model, log_freq=log_freq, vis_freq=vis_freq)
+                    mean_val_loss, mean_val_metric = self.run_one_epoch(epoch, val_loader, model, 
+                                                                        log_freq=log_freq, vis_freq=vis_freq, 
+                                                                        input_format=input_format)
                     
                     print(f"[Epoch {epoch}/{max_epochs}] Validation mean loss/metric: {mean_val_loss:.5f}/{mean_val_metric:.5f}")
 
@@ -239,24 +270,23 @@ class Solver(object):
             if EXIT:
                 break
 
-    def test(self, model, test_loader):
+    def test(self, model, test_loader, test_args):
         model.to(self.device)
         model.eval()
-        
+
+        input_format = test_args.get('input_format', 'darr')
         results = []
 
         with torch.no_grad():
             for iter, batch in enumerate(tqdm(test_loader), 1):
-                # TODO: input selection
-                depth_arr, edge_mask, rgb_img, depth_img = FurrowDataset.split_item(batch)
-                X = depth_arr.to(self.device)
-                targets = edge_mask.to(self.device)
+                samples = FurrowDataset.split_item(batch, input_format)
+                X = samples['input'].to(self.device)
+                targets = samples['gt'].to(self.device)
                 logits = model(X)
                 preds = torch.sigmoid(logits)
-                # preds = torch.sigmoid(logits) > 0.5
                 
-                img_grid = prepare_batch_visualization(preds, targets, max_items=np.inf)
-                self.writer.add_image("Test", img_grid, global_step=iter) # NOTE: add_image method expects image values in range [0,1]
+                img_grid = prepare_batch_visualization([samples['input'], preds, targets], max_items=np.inf)
+                self.writer.add_image("Test", img_grid, global_step=iter)
                 self.writer.flush()
 
                 results.append(preds)
