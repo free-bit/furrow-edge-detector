@@ -23,6 +23,8 @@ DRGB_FILE = "{frame_id}_depth.png"
 T_MAP = {
     "affine": F.affine,
     "center_crop": F.center_crop,
+    "crop_right": T.Lambda(lambda x: F.crop(x, top=80, left=240, height=400, width=400)), 
+    "crop_left": T.Lambda(lambda x: F.crop(x, top=80, left=0, height=400, width=400)),
     "gaussian_blur": F.gaussian_blur,
     "normalize": T.Lambda(lambda x: F.normalize(x, mean=0.5, std=0.5)), # Pixel values in range: [-1,1]
     "resize": F.resize,
@@ -128,9 +130,8 @@ class FurrowDataset(Dataset):
             darr_file = DEPTH_FILE.format(frame_id=frame_id)
             darr_path = os.path.join(data_path, darr_file)
             depth_arr = np.load(darr_path) # np.float64
-            depth_arr = 255 * (depth_arr / depth_arr.max()) # Expand range to [0, 255]
-            depth_arr = Image.fromarray(depth_arr).convert('RGB') # np.uint8 TODO: This might be made optional
-            item['depth_arr'] = self.input_trans(depth_arr)
+            depth_arr = np.rint(255 * (depth_arr / depth_arr.max()))         # Expand range to [0, 255]
+            item['depth_arr'] = self.input_trans(depth_arr.astype(np.uint8)) # np.float64 -> np.uin8
             
         if load_edge:
             edge_file = EDGE_FILE.format(frame_id=frame_id)
@@ -184,24 +185,24 @@ class FurrowDataset(Dataset):
         rgb_img = item.get("rgb_img", None)
         depth_img = item.get("depth_img", None)
         
-        # Depth as array only (C:1)
-        if input_format is "darr":
-            samples['input'] = depth_arr
+        # Depth as array only (C:1) -> (C:3)
+        if input_format == "darr":
+            samples['input'] = depth_arr.expand(-1, 3, -1, -1) # TODO: This might be made optional
 
         # RGB image only (C:3)
-        elif input_format is "rgb":
+        elif input_format == "rgb":
             samples['input'] = rgb_img
         
         # Depth as image only  (C:3)
-        elif input_format is "drgb":
+        elif input_format == "drgb":
             samples['input'] = depth_img
         
-        # RGB + Depth as array (C:4)
-        elif input_format is "rgb-darr":
+        # RGB + Depth as array (C:3+1)
+        elif input_format == "rgb-darr":
             samples['input'] = torch.cat((rgb_img, depth_arr), dim=1)
         
-        # RGB + Depth as image (C:6)
-        elif input_format is "rgb-drgb":
+        # RGB + Depth as image (C:3+3)
+        elif input_format == "rgb-drgb":
             samples['input'] = torch.cat((rgb_img, depth_img), dim=1)
 
         else:

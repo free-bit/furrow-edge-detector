@@ -32,16 +32,13 @@ signal.signal(signal.SIGINT, interrupt_handler)
 
 def class_balanced_bce(logits, targets):
     total = np.prod(targets.shape[2:4])                      # total pixel count: scalar
-    pos_count = torch.sum(targets, dim=(2,3), keepdim=True)  # + count per image: Nx1x1x1
-    neg_count = total - pos_count                            # - count per image: Nx1x1x1
-    pos_weights = targets * (neg_count / pos_count)          # b / (1 - b) term:  Nx1xHxW
-    weights = torch.ones_like(targets) * (pos_count / total) # (1 - b) term:      Nx1xHxW
+    pos_count = torch.sum(targets, dim=(2,3), keepdim=True)  # + count per image: Nx6x1x1
+    neg_count = total - pos_count                            # - count per image: Nx6x1x1
+    pos_weights = targets * (neg_count / pos_count)          # b / (1 - b) term:  Nx6xHxW
+    weights = torch.ones_like(targets) * (pos_count / total) # (1 - b) term:      Nx6xHxW
 
     # BCE with Logits == Sigmoid(Logits) + Weighted BCE:
     # weights * [pos_weights * y * -log(sigmoid(logits)) + (1 - y) * -log(1 - sigmoid(x))]
-    # 'mean' reduction does the followings:
-    # 1) avg loss of pixels for each image
-    # 2) avg loss of images in the batch
     loss = F.binary_cross_entropy_with_logits(logits, targets, 
                                               weight=weights, 
                                               pos_weight=pos_weights, 
@@ -52,9 +49,14 @@ def class_balanced_bce(logits, targets):
 def f1_score(logits, targets, threshold=0.5):
     preds = torch.sigmoid(logits) > threshold
     
-    tp = (preds.bool() * targets.bool()).sum(dim=(2,3))
-    fp = (preds.bool() * ~targets.bool()).sum(dim=(2,3))
-    tn = (~preds.bool() * ~targets.bool()).sum(dim=(2,3))
+    edge = preds.bool()
+    non_edge = ~edge
+    gt_edge = targets.bool()
+    gt_non_edge = ~gt_edge
+    
+    tp = (edge * gt_edge).sum(dim=(2,3))
+    fp = (edge * gt_non_edge).sum(dim=(2,3))
+    tn = (non_edge * gt_non_edge).sum(dim=(2,3))
     
     precision = tp / (tp + fp)
     recall = tp / (tp + tn)
@@ -64,6 +66,7 @@ def f1_score(logits, targets, threshold=0.5):
 
     return f1.mean()
 
+# TODO: prepare_batch_visualization has to adapt input channels 4 & 6 somehow
 def prepare_batch_visualization(batch_groups, start=0, end=np.inf, max_items=3):
     """Construct a grid from batch_groups (type: list). 
     
@@ -130,7 +133,11 @@ class Solver(object):
         self.loss_func = LOSSES[loss_id]
         self.metric_func = METRICS[metric_id]
         self.device = solver_args["device"]
-        self.writer = SummaryWriter(solver_args["log_path"])
+        self.writers = {
+            "Train": SummaryWriter(os.path.join(solver_args["log_path"], "train")),
+            "Validation": SummaryWriter(os.path.join(solver_args["log_path"], "val")),
+            "Test": SummaryWriter(os.path.join(solver_args["log_path"], "test")),
+        }
         self.clear_history()
         self.solver_args = solver_args
 
@@ -144,14 +151,17 @@ class Solver(object):
         self.val_metric_hist = []
 
     def forward(self, model, X, targets):
-        # X: Bx1xHxW | Bx3xHxW | Bx4xHxW | Bx6xHxW
+        # X: Bx3xHxW | Bx4xHxW | Bx6xHxW
+        # logits: Bx6xHxW
         # targets: Bx1xHxW
+        # output: Bx1xHxW
         logits = model(X)
-        # preds = torch.sigmoid(logits)
-        loss = self.loss_func(logits, targets)     # Single loss value (averaged over batch)
-        metric = self.metric_func(logits, targets) # Single metric score (averaged over batch)
+        loss = self.loss_func(logits, targets.expand_as(logits)) # Single loss value (averaged)
+        
+        output = logits.mean(dim=1, keepdims=True) # TODO: Try out different stuff here
+        metric = self.metric_func(output, targets)  # Single metric score (averaged)
 
-        return logits, loss, metric
+        return output, loss, metric
 
     def backward(self, optim, loss):
         loss.backward()
@@ -166,6 +176,7 @@ class Solver(object):
                       input_format='darr'):
         mode = "Train" if model.training else 'Validation'
 
+        writer = self.writers[mode]
         total_iter = len(loader)
         offset = (epoch-1) * total_iter
         losses = []
@@ -186,9 +197,9 @@ class Solver(object):
             metrics.append(metric)
 
             global_iter = iter + offset
-            self.writer.add_scalar(f'Batch/Loss/{mode}', loss, global_iter)
-            self.writer.add_scalar(f'Batch/Metric/{mode}', metric, global_iter)
-            self.writer.flush()
+            writer.add_scalar(f'Batch/Loss/', loss, global_iter)
+            writer.add_scalar(f'Batch/Metric/', metric, global_iter)
+            writer.flush()
 
             if log_freq > 0 and iter % log_freq == 0:
                 print(f"[Iteration {iter}/{total_iter}] {mode} loss/metric: {loss:.5f}/{metric:.5f}")
@@ -196,8 +207,8 @@ class Solver(object):
             if vis_freq > 0 and iter % vis_freq == 0:
                 preds = torch.sigmoid(logits)
                 img_grid = prepare_batch_visualization([samples['input'], preds, targets], max_items=max_vis)
-                self.writer.add_image(f"{mode}", img_grid, global_step=global_iter)
-                self.writer.flush()
+                writer.add_image("Input/Prediction/Target", img_grid, global_step=global_iter)
+                writer.flush()
 
     
         mean_loss = np.mean(losses)
@@ -233,9 +244,9 @@ class Solver(object):
             self.train_loss_hist.append(mean_train_loss)
             self.train_metric_hist.append(mean_train_metric)
             
-            self.writer.add_scalar('Epoch/Loss/Train', mean_train_loss, epoch)
-            self.writer.add_scalar('Epoch/Metric/Train', mean_train_metric, epoch)
-            self.writer.flush()
+            self.writers['Train'].add_scalar('Epoch/Loss/', mean_train_loss, epoch)
+            self.writers['Train'].add_scalar('Epoch/Metric/', mean_train_metric, epoch)
+            self.writers['Train'].flush()
 
             # Perform a full pass over validation data (according to specified period)
             mean_val_loss = np.inf
@@ -252,9 +263,9 @@ class Solver(object):
                     self.val_loss_hist.append(mean_val_loss)
                     self.val_metric_hist.append(mean_val_metric)
 
-                    self.writer.add_scalar('Epoch/Loss/Validation', mean_val_loss, epoch)
-                    self.writer.add_scalar('Epoch/Metric/Validation', mean_val_metric, epoch)
-                    self.writer.flush()
+                    self.writers['Validation'].add_scalar('Epoch/Loss/', mean_val_loss, epoch)
+                    self.writers['Validation'].add_scalar('Epoch/Metric/', mean_val_metric, epoch)
+                    self.writers['Validation'].flush()
 
             # Checkpoint is disabled for ckpt_freq <= 0
             make_ckpt = False
@@ -283,11 +294,12 @@ class Solver(object):
                 X = samples['input'].to(self.device)
                 targets = samples['gt'].to(self.device)
                 logits = model(X)
-                preds = torch.sigmoid(logits)
+                output = logits.mean(dim=1, keepdims=True) # TODO: Try out different stuff here
+                preds = torch.sigmoid(output)
                 
                 img_grid = prepare_batch_visualization([samples['input'], preds, targets], max_items=np.inf)
-                self.writer.add_image("Test", img_grid, global_step=iter)
-                self.writer.flush()
+                self.writers['Test'].add_image("Input/Prediction/Target", img_grid, global_step=iter)
+                self.writers['Test'].flush()
 
                 results.append(preds)
         
