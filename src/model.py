@@ -6,10 +6,11 @@ class RidgeDetector(nn.Module):
     def __init__(self, model_args):
         super().__init__()
 
-        self.zeroth_layer = None
         layers = vgg16(pretrained=model_args['pretrained']).features
         input_format = model_args['input_format']
         self.model_args = model_args
+
+        self.zeroth_layer = nn.Identity()
 
         # RGB + Depth as array (C:4) -> 1x1 conv -> (C:3)
         if input_format == "rgb-darr":
@@ -71,14 +72,7 @@ class RidgeDetector(nn.Module):
 
     def forward(self, x):
         # x: NxCxHxW -> y: NxCxHxW -> sideouts: 5xNxCxHxW
-        # TODO: Why? Check paper.
-        # r = (x[:, 0:1, :, :] * 255.0) - 104.00698793
-        # g = (x[:, 1:2, :, :] * 255.0) - 116.66876762
-        # b = (x[:, 2:3, :, :] * 255.0) - 122.67891434
-        # x = torch.cat([r, g, b], 1)
-
-        if self.zeroth_layer:
-            x = self.zeroth_layer(x)
+        x = self.zeroth_layer(x)
 
         x = self.stage1(x)
         y1 = self.sideout1(x)

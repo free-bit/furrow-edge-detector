@@ -15,6 +15,7 @@ from utils.helpers import coord_to_mask, take_items
 ID_FILE = "{folder_id}_ids.txt"
 TIME_FILE = "{folder_id}_time.json"
 
+# TODO: For augmented images, add new name templates, e.g. "{frame_id}_shift_edge_pts.npy"
 DEPTH_FILE = "{frame_id}_depth.npy"
 EDGE_FILE = "{frame_id}_edge_pts.npy"
 RGB_FILE = "{frame_id}_rgb.png"
@@ -26,7 +27,8 @@ T_MAP = {
     "crop_right": T.Lambda(lambda x: F.crop(x, top=80, left=240, height=400, width=400)), 
     "crop_left": T.Lambda(lambda x: F.crop(x, top=80, left=0, height=400, width=400)),
     "gaussian_blur": F.gaussian_blur,
-    "normalize": T.Lambda(lambda x: F.normalize(x, mean=0.5, std=0.5)), # Pixel values in range: [-1,1]
+    "normalize_imagenet": T.Lambda(lambda x: F.normalize(x, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])),
+    "normalize_furrowset": T.Lambda(lambda x: F.normalize(x, mean=0.5, std=0.5)), # Pixel values in range: [-1,1] # TODO: Compute mean & variance in the dataset
     "resize": F.resize,
     "rotate": F.rotate,
     "to_tensor": F.to_tensor, # Pixel values in range: [0,1]
@@ -59,9 +61,10 @@ class FurrowDataset(Dataset):
         start = data_args.get("start", 0)
         end = data_args.get("end", np.inf)
         max_frames = data_args.get("max_frames", np.inf)
+        step = data_args.get("step", 1)
         self.read_frame_metadata()
         self.frame_count = len(self.frame_ids)
-        self.take_frames(start, end, max_frames)
+        self.take_frames(start, end, max_frames, step)
 
     def get_args(self):
         return self.data_args
@@ -98,9 +101,9 @@ class FurrowDataset(Dataset):
             with open(path) as f:
                 self.timestamps = json.load(f)
 
-    def take_frames(self, start=0, end=np.inf, max_frames=np.inf):
+    def take_frames(self, start=0, end=np.inf, max_frames=np.inf, step=1):
         """Shrink the number of frames to read according to given range and count"""
-        self.frame_ids = take_items(self.frame_ids, start, end, max_frames)
+        self.frame_ids = take_items(self.frame_ids, start, end, max_frames, step)
 
     def __len__(self):
         # Size <-> Number of frames
@@ -137,19 +140,19 @@ class FurrowDataset(Dataset):
             edge_file = EDGE_FILE.format(frame_id=frame_id)
             edge_path = os.path.join(data_path, edge_file)
             edge_pixels = np.load(edge_path)
-            edge_mask = coord_to_mask(shape, edge_pixels) # np.uin8
+            edge_mask = coord_to_mask(shape, edge_pixels) # PIL.Image (np.uin8)
             item['edge_mask'] = self.output_trans(edge_mask)
         
         if load_rgb:
             rgb_file = RGB_FILE.format(frame_id=frame_id)
             rgb_path = os.path.join(data_path, rgb_file)
-            rgb_img = Image.open(rgb_path) # np.uin8
+            rgb_img = Image.open(rgb_path) # PIL.Image (np.uin8)
             item['rgb_img'] = self.input_trans(rgb_img)
         
         if load_drgb:
             drgb_file = DRGB_FILE.format(frame_id=frame_id)
             drgb_path = os.path.join(data_path, drgb_file)
-            depth_img = Image.open(drgb_path) # np.uin8
+            depth_img = Image.open(drgb_path) # PIL.Image (np.uin8)
             item['depth_img'] = self.input_trans(depth_img)
 
         if load_time:
