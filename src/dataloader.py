@@ -49,10 +49,10 @@ class FurrowDataset(Dataset):
         
         # Output transforms
         t_list = []
-        t_ids = self.data_args["output_trans"]
+        t_ids = self.data_args["target_trans"]
         for t_id in t_ids:
             t_list.append(T_MAP[t_id])
-        self.output_trans = T.Compose(t_list)
+        self.target_trans = T.Compose(t_list)
         
         self.frame_ids = []
         self.timestamps = {}
@@ -109,112 +109,107 @@ class FurrowDataset(Dataset):
         # Size <-> Number of frames
         return len(self.frame_ids)
 
-    def __getitem__(self, idx):
-        data_path = self.data_args['data_path']
+    def load_darr(self, frame_id):
+        darr_file = DEPTH_FILE.format(frame_id=frame_id)
+        darr_path = os.path.join(self.data_args['data_path'], darr_file)
+        depth_arr = np.load(darr_path) # np.float64
+        depth_arr = np.rint(255 * (depth_arr / depth_arr.max())) # Expand range to [0, 255]
+        return depth_arr.astype(np.uint8) # np.float64 -> np.uin8
+
+    def load_rgb(self, frame_id):
+        rgb_file = RGB_FILE.format(frame_id=frame_id)
+        rgb_path = os.path.join(self.data_args['data_path'], rgb_file)
+        rgb_img = Image.open(rgb_path) # np.uin8
+        return np.array(rgb_img)
+
+    def load_drgb(self, frame_id):
+        drgb_file = DRGB_FILE.format(frame_id=frame_id)
+        drgb_path = os.path.join(self.data_args['data_path'], drgb_file)
+        depth_img = Image.open(drgb_path) # np.uin8
+        return np.array(depth_img)
+
+    def load_edge(self, frame_id):
         shape = self.data_args.get("shape", (480, 640))
-        load_darr = self.data_args.get("load_darr", True)
+        edge_width = self.data_args['edge_width']
+        edge_file = EDGE_FILE.format(frame_id=frame_id)
+        edge_path = os.path.join(self.data_args['data_path'], edge_file)
+        edge_pixels = np.load(edge_path)
+        edge_mask = coord_to_mask(shape, edge_pixels, thickness=edge_width) # np.uin8
+        return np.array(edge_mask)
+
+    def __getitem__(self, idx):
+        input_format = self.data_args.get("input_format", 'darr')
         load_edge = self.data_args.get("load_edge", True)
-        load_rgb = self.data_args.get("load_rgb", False)
-        load_drgb = self.data_args.get("load_drgb", False)
         load_time = self.data_args.get("load_time", False)
         
         frame_id = self.frame_ids[idx]
-        
-        item = {
-            'frame_id': frame_id,
-            # 'depth_arr'
-            # 'edge_mask'
-            # 'rgb_img'
-            # 'depth_img'
-            # 'time'
+        sample = {
+            "frame_id": frame_id
         }
 
-        if load_darr:
-            darr_file = DEPTH_FILE.format(frame_id=frame_id)
-            darr_path = os.path.join(data_path, darr_file)
-            depth_arr = np.load(darr_path) # np.float64
-            depth_arr = np.rint(255 * (depth_arr / depth_arr.max()))         # Expand range to [0, 255]
-            item['depth_arr'] = self.input_trans(depth_arr.astype(np.uint8)) # np.float64 -> np.uin8
-            
+        # Loading data as specified:
+        
+        # Load edge mask
         if load_edge:
-            edge_file = EDGE_FILE.format(frame_id=frame_id)
-            edge_path = os.path.join(data_path, edge_file)
-            edge_pixels = np.load(edge_path)
-            edge_mask = coord_to_mask(shape, edge_pixels) # PIL.Image (np.uin8)
-            item['edge_mask'] = self.output_trans(edge_mask)
+            edge_mask = self.load_edge(frame_id)
+            sample['target'] = self.target_trans(edge_mask)
         
-        if load_rgb:
-            rgb_file = RGB_FILE.format(frame_id=frame_id)
-            rgb_path = os.path.join(data_path, rgb_file)
-            rgb_img = Image.open(rgb_path) # PIL.Image (np.uin8)
-            item['rgb_img'] = self.input_trans(rgb_img)
-        
-        if load_drgb:
-            drgb_file = DRGB_FILE.format(frame_id=frame_id)
-            drgb_path = os.path.join(data_path, drgb_file)
-            depth_img = Image.open(drgb_path) # PIL.Image (np.uin8)
-            item['depth_img'] = self.input_trans(depth_img)
-
+        # Load timestamps
         if load_time:
-            item['time'] = self.timestamps[str(frame_id)]
+            sample['time'] = self.timestamps[str(frame_id)]
+        
+        # Load depth as array only (C:1) -> (C:3)
+        if input_format == "darr":
+            depth_arr = self.load_darr(frame_id)
+            depth_arr = np.stack([depth_arr, depth_arr, depth_arr], axis=-1)
+            sample['input'] = self.input_trans(depth_arr) # TODO: This might be made optional
 
-        return item
+        # Load RGB image only (C:3)
+        elif input_format == "rgb":
+            rgb_img = self.load_rgb(frame_id)
+            sample['input'] = self.input_trans(rgb_img)
+        
+        # Load depth as image only  (C:3)
+        elif input_format == "drgb":
+            depth_img = self.load_drgb(frame_id)
+            sample['input'] = self.input_trans(depth_img)
+        
+        # Load RGB + Depth as array (C:3+1)
+        elif input_format == "rgb-darr":
+            rgb_img = self.input_trans(self.load_rgb(frame_id))
+            depth_arr = self.input_trans(self.load_darr(frame_id))
+            sample['input'] = torch.cat((rgb_img, depth_arr), dim=-1)
+        
+        # Load RGB + Depth as image (C:3+3)
+        elif input_format == "rgb-drgb":
+            rgb_img = self.input_trans(self.load_rgb(frame_id))
+            depth_img = self.input_trans(self.load_drgb(frame_id))
+            sample['input'] = torch.cat((rgb_img, depth_img), dim=-1)
+
+        else:
+            raise NotImplementedError
+        
+        return sample
 
     def __str__(self):
         data_path = self.data_args['data_path']
-        load_darr = self.data_args.get("load_darr", True)
+        input_format = self.data_args.get("input_format", 'darr')
+        load_darr = input_format in ('darr', 'rgb-darr')
+        load_rgb = input_format in ('rgb', 'rgb-darr', 'rgb-drgb')
+        load_drgb = input_format in ('drgb', 'rgb-drgb')
         load_edge = self.data_args.get("load_edge", True)
-        load_rgb = self.data_args.get("load_rgb", False)
-        load_drgb = self.data_args.get("load_drgb", False)
         load_time = self.data_args.get("load_time", False)
         
         info = "Status of dataset:\n"+\
                f"* Dataset path: {data_path}\n"+\
                f"* Number of frames: Fetched/Total: {len(self.frame_ids)}/{self.frame_count}\n"+\
-               f"* Load depth arrays: {load_darr}\n"+\
-               f"* Load edge coordinates: {load_edge}\n"+\
-               f"* Load RGBs: {load_rgb}\n"+\
-               f"* Load depth RGB files: {load_drgb}\n"+\
+               f"* Input format: {input_format}\n"+\
+               f"* Load depth as array: {load_darr}\n"+\
+               f"* Load RGB: {load_rgb}\n"+\
+               f"* Load depth as RGB: {load_drgb}\n"+\
+               f"* Load edge coordinates (ground truth): {load_edge}\n"+\
                f"* Load timestamps: {load_time}\n"
         return info
-
-    @staticmethod
-    def split_item(item, input_format="darr"):
-        samples = {
-            'frame_ids': item['frame_id']
-        }
-
-        depth_arr = item.get("depth_arr", None)
-        rgb_img = item.get("rgb_img", None)
-        depth_img = item.get("depth_img", None)
-        
-        # Depth as array only (C:1) -> (C:3)
-        if input_format == "darr":
-            samples['input'] = depth_arr.expand(-1, 3, -1, -1) # TODO: This might be made optional
-
-        # RGB image only (C:3)
-        elif input_format == "rgb":
-            samples['input'] = rgb_img
-        
-        # Depth as image only  (C:3)
-        elif input_format == "drgb":
-            samples['input'] = depth_img
-        
-        # RGB + Depth as array (C:3+1)
-        elif input_format == "rgb-darr":
-            samples['input'] = torch.cat((rgb_img, depth_arr), dim=1)
-        
-        # RGB + Depth as image (C:3+3)
-        elif input_format == "rgb-drgb":
-            samples['input'] = torch.cat((rgb_img, depth_img), dim=1)
-
-        else:
-            raise NotImplementedError
-
-        edge_mask = item.get("edge_mask", None)
-        samples['gt'] = edge_mask
-
-        return samples
 
 def main():
     data_args = {

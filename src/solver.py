@@ -5,12 +5,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+from torchvision import transforms as T
 from torchvision.utils import make_grid
 from time import time
 from tqdm.auto import tqdm
 
-from src.dataloader import FurrowDataset
-from utils.helpers import save_checkpoint, take_items
+from src.model import RidgeDetector
+from utils.helpers import take_items
 
 # TODO: 
 # Debug
@@ -29,6 +30,58 @@ def interrupt_handler(signum, frame):
         print("\nTerminating.")
 
 signal.signal(signal.SIGINT, interrupt_handler)
+
+optimizers = {
+    "adam": torch.optim.Adam,
+    "sgd": torch.optim.SGD,
+    #...
+}
+
+def save_checkpoint(ckpt_path, epoch, model, optim, loss=None, acc=None):
+    checkpoint = { 
+        'epoch': epoch,
+        'loss': loss,
+        'accuracy': acc,
+        'model_args': model.get_args(),
+        'model_state': model.state_dict(),
+        'optim_name': str(optim.__class__).split('.')[2],
+        'optim_args': optim.defaults,
+        'optim_state': optim.state_dict(),
+    }
+    file = f'{epoch}_ckpt.pth'
+    path = os.path.join(ckpt_path, file)
+    torch.save(checkpoint, path)
+
+def load_checkpoint(ckpt_path):
+    checkpoint = torch.load(ckpt_path)
+    last_epoch = checkpoint["epoch"]
+    last_loss = checkpoint["loss"]
+    last_acc = checkpoint["accuracy"]
+    
+    # Architecture is reinstantiated based on args saved
+    model = RidgeDetector(checkpoint['model_args'])
+    # Recover state
+    model.load_state_dict(checkpoint['model_state'])
+    # Optimizer is reinstantiated based on args saved
+    optim_name = "adam" # checkpoint['optim_name']
+    optim = optimizers[optim_name](filter(lambda p: p.requires_grad, model.parameters()), **checkpoint['optim_args'])
+    # Recover state
+    optim.load_state_dict(checkpoint['optim_state'])
+
+    return last_epoch, last_loss, last_acc, model, optim
+
+def topk(arr, k, largest=True):
+    """Find top k elements in D dimensional array and return values (k,) and indices (kxD)"""
+    assert k > 0, "k({}) has to be positive.".format(k)
+    flat_arr = np.ravel(arr)
+    # np.argsort sorts in ascending order, take last n elements in reverse order
+    topk = np.arange(k)
+    if largest:
+        topk = -(topk + 1)
+    flat_top_idxs = np.argsort(flat_arr)[topk]
+    top_idxs = np.unravel_index(flat_top_idxs, arr.shape)
+    top_vals = arr[top_idxs]
+    return (top_vals, np.array(list(zip(*top_idxs))))
 
 def class_balanced_bce(logits, targets):
     total = np.prod(targets.shape[2:4])                      # total pixel count: scalar
@@ -65,6 +118,20 @@ def f1_score(logits, targets, threshold=0.5):
     f1[f1 != f1] = 0 # nan -> 0 TODO: Change when not needed
 
     return f1.mean()
+
+unnormalize_imagenet = T.Compose([T.Normalize(mean=[ 0.,0.,0.], std=[1/0.229,1/0.224,1/0.225 ]),
+                                  T.Normalize(mean=[-0.485,-0.456,-0.406], std=[1.,1.,1.])])
+
+def revert_input_transforms(X, input_format):
+    X_lst = []
+    if input_format in ("darr", "rgb", "drgb"):
+        X_lst.append(unnormalize_imagenet(X))
+    
+    elif input_format in ("rgb-darr", "rgb-drgb"):
+        X1, X2 = torch.split(X, 3, dim=1)
+        X_lst.extend([unnormalize_imagenet(X1), unnormalize_imagenet(X2)])
+
+    return X_lst
 
 # TODO: prepare_batch_visualization has to adapt input channels 4 & 6 somehow
 def prepare_batch_visualization(batch_groups, start=0, end=np.inf, max_items=3):
@@ -158,7 +225,7 @@ class Solver(object):
         logits = model(X)
         loss = self.loss_func(logits, targets.expand_as(logits)) # Single loss value (averaged)
         
-        output = logits.mean(dim=1, keepdims=True) # TODO: Try out different stuff here
+        output = logits.mean(dim=1, keepdims=True) # TODO: return all for visualization purposes
         metric = self.metric_func(output, targets)  # Single metric score (averaged)
 
         return output, loss, metric
@@ -168,13 +235,13 @@ class Solver(object):
         optim.step()
         optim.zero_grad()
 
-    def run_one_epoch(self, epoch, loader, model, 
-                      optim=None, 
-                      log_freq=0, 
-                      vis_freq=0, 
-                      max_vis=5,
-                      input_format='darr'):
+    def run_one_epoch(self, epoch, loader, model, optim=None, args={}):
         mode = "Train" if model.training else 'Validation'
+
+        input_format = args.get('input_format', 'darr')
+        log_freq = args.get('log_freq', 0)
+        vis_freq = args.get('vis_freq', 0)
+        max_vis = args.get('max_vis', 5)
 
         writer = self.writers[mode]
         total_iter = len(loader)
@@ -184,9 +251,8 @@ class Solver(object):
         
         # iter: [1, total_iter]
         for iter, batch in enumerate(tqdm(loader), 1):
-            samples = FurrowDataset.split_item(batch, input_format=input_format)
-            X = samples['input'].to(self.device)
-            targets = samples['gt'].to(self.device)
+            X = batch['input'].to(self.device)
+            targets = batch['target'].to(self.device)
             logits, loss, metric = self.forward(model, X, targets)
             if model.training:
                 self.backward(optim, loss)
@@ -206,7 +272,8 @@ class Solver(object):
 
             if vis_freq > 0 and iter % vis_freq == 0:
                 preds = torch.sigmoid(logits)
-                img_grid = prepare_batch_visualization([samples['input'], preds, targets], max_items=max_vis)
+                X_lst = revert_input_transforms(X, input_format)
+                img_grid = prepare_batch_visualization([*X_lst, preds, targets], max_items=max_vis)
                 writer.add_image("Input/Prediction/Target", img_grid, global_step=global_iter)
                 writer.flush()
 
@@ -222,10 +289,7 @@ class Solver(object):
         ckpt_path = train_args['ckpt_path']
         max_epochs = train_args.get('max_epochs', 10)
         val_freq = train_args.get('val_freq', 1)
-        log_freq = train_args.get('log_freq', 0)
-        vis_freq = train_args.get('vis_freq', 0)
         ckpt_freq = train_args.get('ckpt_freq', 0)
-        input_format = train_args.get('input_format', 'darr')
         
         best_loss = np.inf
         best_metric = -1
@@ -235,9 +299,7 @@ class Solver(object):
         for epoch in range(1, max_epochs+1):
             # Perform a full pass over training data
             model.train()
-            mean_train_loss, mean_train_metric = self.run_one_epoch(epoch, train_loader, model, optim, 
-                                                                    log_freq=log_freq, vis_freq=vis_freq, 
-                                                                    input_format=input_format)
+            mean_train_loss, mean_train_metric = self.run_one_epoch(epoch, train_loader, model, optim, train_args)
 
             print(f"[Epoch {epoch}/{max_epochs}] Train mean loss/metric: {mean_train_loss:.5f}/{mean_train_metric:.5f}")
 
@@ -254,9 +316,7 @@ class Solver(object):
             if val_freq > 0 and epoch % val_freq == 0:
                 model.eval()
                 with torch.no_grad():
-                    mean_val_loss, mean_val_metric = self.run_one_epoch(epoch, val_loader, model, 
-                                                                        log_freq=log_freq, vis_freq=vis_freq, 
-                                                                        input_format=input_format)
+                    mean_val_loss, mean_val_metric = self.run_one_epoch(epoch, val_loader, model, args=train_args)
                     
                     print(f"[Epoch {epoch}/{max_epochs}] Validation mean loss/metric: {mean_val_loss:.5f}/{mean_val_metric:.5f}")
 
@@ -286,18 +346,19 @@ class Solver(object):
         model.eval()
 
         input_format = test_args.get('input_format', 'darr')
+        max_vis = test_args.get('max_vis', 5)
         results = []
 
         with torch.no_grad():
             for iter, batch in enumerate(tqdm(test_loader), 1):
-                samples = FurrowDataset.split_item(batch, input_format)
-                X = samples['input'].to(self.device)
-                targets = samples['gt'].to(self.device)
+                X = batch['input'].to(self.device)
+                targets = batch['target'].to(self.device)
                 logits = model(X)
-                output = logits.mean(dim=1, keepdims=True) # TODO: Try out different stuff here
+                output = logits.mean(dim=1, keepdims=True) # TODO: Try out different stuff here, currently: mean(sideouts, fusion)
                 preds = torch.sigmoid(output)
                 
-                img_grid = prepare_batch_visualization([samples['input'], preds, targets], max_items=np.inf)
+                X_lst = revert_input_transforms(X, input_format)
+                img_grid = prepare_batch_visualization([*X_lst, preds, targets], max_items=max_vis)
                 self.writers['Test'].add_image("Input/Prediction/Target", img_grid, global_step=iter)
                 self.writers['Test'].flush()
 
