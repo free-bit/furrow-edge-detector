@@ -7,11 +7,48 @@ import os
 import cv2
 from matplotlib import pyplot as plt
 import numpy as np
-import pandas as pd 
+import pandas as pd
+from PIL import Image
 from pprint import pprint
 import torch
 from scipy.cluster.hierarchy import dendrogram
 from sklearn.cluster import AgglomerativeClustering
+
+# TODO: For augmented images, add new name templates, e.g. "{frame_id}_shift_edge_pts.npy"
+DEPTH_FILE = "{frame_id}_depth.npy"
+EDGE_FILE = "{frame_id}_edge_pts.npy"
+RGB_FILE = "{frame_id}_rgb.png"
+DRGB_FILE = "{frame_id}_depth.png"
+
+def load_darr(data_path, frame_id):
+    darr_file = DEPTH_FILE.format(frame_id=frame_id)
+    darr_path = os.path.join(data_path, darr_file)
+    depth_arr = np.load(darr_path) # np.float64
+    depth_arr = np.rint(255 * (depth_arr / depth_arr.max())) # Expand range to [0, 255]
+    return depth_arr.astype(np.uint8) # np.float64 -> np.uin8
+
+def load_rgb(data_path, frame_id):
+    rgb_file = RGB_FILE.format(frame_id=frame_id)
+    rgb_path = os.path.join(data_path, rgb_file)
+    rgb_img = Image.open(rgb_path) # np.uin8
+    return np.array(rgb_img)
+
+def load_drgb(data_path, frame_id):
+    drgb_file = DRGB_FILE.format(frame_id=frame_id)
+    drgb_path = os.path.join(data_path, drgb_file)
+    depth_img = Image.open(drgb_path) # np.uin8
+    return np.array(depth_img)
+
+def load_edge_coords(data_path, frame_id):
+    edge_file = EDGE_FILE.format(frame_id=frame_id)
+    edge_path = os.path.join(data_path, edge_file)
+    edge_pixels = np.load(edge_path)
+    return edge_pixels
+
+def load_edge_mask(data_path, frame_id, shape=(480, 640), edge_width=3):
+    edge_pixels = load_edge_coords(data_path, frame_id)
+    edge_mask = coord_to_mask(shape, edge_pixels, thickness=edge_width) # np.uin8
+    return np.array(edge_mask)
 
 def take_items(items, start=0, end=np.inf, n=np.inf, step=1):
     """Take n items from the specified slice (start,end) and return list of numpy.array or torch.tensor"""

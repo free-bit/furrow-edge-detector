@@ -4,22 +4,15 @@ import json
 import os
 
 import numpy as np
-from PIL import Image
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms as T
 from torchvision.transforms import functional as F
 
-from utils.helpers import coord_to_mask, take_items
+from utils.helpers import load_darr, load_rgb, load_drgb, load_edge_mask, take_items
 
 ID_FILE = "{folder_id}_ids.txt"
 TIME_FILE = "{folder_id}_time.json"
-
-# TODO: For augmented images, add new name templates, e.g. "{frame_id}_shift_edge_pts.npy"
-DEPTH_FILE = "{frame_id}_depth.npy"
-EDGE_FILE = "{frame_id}_edge_pts.npy"
-RGB_FILE = "{frame_id}_rgb.png"
-DRGB_FILE = "{frame_id}_depth.png"
 
 T_MAP = {
     "affine": F.affine,
@@ -109,37 +102,12 @@ class FurrowDataset(Dataset):
         # Size <-> Number of frames
         return len(self.frame_ids)
 
-    def load_darr(self, frame_id):
-        darr_file = DEPTH_FILE.format(frame_id=frame_id)
-        darr_path = os.path.join(self.data_args['data_path'], darr_file)
-        depth_arr = np.load(darr_path) # np.float64
-        depth_arr = np.rint(255 * (depth_arr / depth_arr.max())) # Expand range to [0, 255]
-        return depth_arr.astype(np.uint8) # np.float64 -> np.uin8
-
-    def load_rgb(self, frame_id):
-        rgb_file = RGB_FILE.format(frame_id=frame_id)
-        rgb_path = os.path.join(self.data_args['data_path'], rgb_file)
-        rgb_img = Image.open(rgb_path) # np.uin8
-        return np.array(rgb_img)
-
-    def load_drgb(self, frame_id):
-        drgb_file = DRGB_FILE.format(frame_id=frame_id)
-        drgb_path = os.path.join(self.data_args['data_path'], drgb_file)
-        depth_img = Image.open(drgb_path) # np.uin8
-        return np.array(depth_img)
-
-    def load_edge(self, frame_id):
-        shape = self.data_args.get("shape", (480, 640))
-        edge_width = self.data_args['edge_width']
-        edge_file = EDGE_FILE.format(frame_id=frame_id)
-        edge_path = os.path.join(self.data_args['data_path'], edge_file)
-        edge_pixels = np.load(edge_path)
-        edge_mask = coord_to_mask(shape, edge_pixels, thickness=edge_width) # np.uin8
-        return np.array(edge_mask)
-
     def __getitem__(self, idx):
+        data_path = self.data_args['data_path']
         input_format = self.data_args.get("input_format", 'darr')
         load_edge = self.data_args.get("load_edge", True)
+        shape = self.data_args.get("shape", (480, 640))
+        edge_width = self.data_args['edge_width']
         load_time = self.data_args.get("load_time", False)
         
         frame_id = self.frame_ids[idx]
@@ -151,7 +119,7 @@ class FurrowDataset(Dataset):
         
         # Load edge mask
         if load_edge:
-            edge_mask = self.load_edge(frame_id)
+            edge_mask = load_edge_mask(data_path, frame_id, shape, edge_width)
             sample['target'] = self.target_trans(edge_mask)
         
         # Load timestamps
@@ -160,30 +128,30 @@ class FurrowDataset(Dataset):
         
         # Load depth as array only (C:1) -> (C:3)
         if input_format == "darr":
-            depth_arr = self.load_darr(frame_id)
+            depth_arr = load_darr(data_path, frame_id)
             depth_arr = np.stack([depth_arr, depth_arr, depth_arr], axis=-1)
             sample['input'] = self.input_trans(depth_arr) # TODO: This might be made optional
 
         # Load RGB image only (C:3)
         elif input_format == "rgb":
-            rgb_img = self.load_rgb(frame_id)
+            rgb_img = load_rgb(data_path, frame_id)
             sample['input'] = self.input_trans(rgb_img)
         
         # Load depth as image only  (C:3)
         elif input_format == "drgb":
-            depth_img = self.load_drgb(frame_id)
+            depth_img = load_drgb(data_path, frame_id)
             sample['input'] = self.input_trans(depth_img)
         
         # Load RGB + Depth as array (C:3+1)
         elif input_format == "rgb-darr":
-            rgb_img = self.input_trans(self.load_rgb(frame_id))
-            depth_arr = self.input_trans(self.load_darr(frame_id))
+            rgb_img = self.input_trans(load_rgb(data_path, frame_id))
+            depth_arr = self.input_trans(load_darr(data_path, frame_id))
             sample['input'] = torch.cat((rgb_img, depth_arr), dim=-1)
         
         # Load RGB + Depth as image (C:3+3)
         elif input_format == "rgb-drgb":
-            rgb_img = self.input_trans(self.load_rgb(frame_id))
-            depth_img = self.input_trans(self.load_drgb(frame_id))
+            rgb_img = self.input_trans(load_rgb(data_path, frame_id))
+            depth_img = self.input_trans(load_drgb(data_path, frame_id))
             sample['input'] = torch.cat((rgb_img, depth_img), dim=-1)
 
         else:
