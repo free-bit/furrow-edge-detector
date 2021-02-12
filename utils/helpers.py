@@ -8,47 +8,9 @@ import cv2
 from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
-from PIL import Image
 from pprint import pprint
-import torch
 from scipy.cluster.hierarchy import dendrogram
 from sklearn.cluster import AgglomerativeClustering
-
-# TODO: For augmented images, add new name templates, e.g. "{frame_id}_shift_edge_pts.npy"
-DEPTH_FILE = "{frame_id}_depth.npy"
-EDGE_FILE = "{frame_id}_edge_pts.npy"
-RGB_FILE = "{frame_id}_rgb.png"
-DRGB_FILE = "{frame_id}_depth.png"
-
-def load_darr(data_path, frame_id):
-    darr_file = DEPTH_FILE.format(frame_id=frame_id)
-    darr_path = os.path.join(data_path, darr_file)
-    depth_arr = np.load(darr_path) # np.float64
-    depth_arr = np.rint(255 * (depth_arr / depth_arr.max())) # Expand range to [0, 255]
-    return depth_arr.astype(np.uint8) # np.float64 -> np.uin8
-
-def load_rgb(data_path, frame_id):
-    rgb_file = RGB_FILE.format(frame_id=frame_id)
-    rgb_path = os.path.join(data_path, rgb_file)
-    rgb_img = Image.open(rgb_path) # np.uin8
-    return np.array(rgb_img)
-
-def load_drgb(data_path, frame_id):
-    drgb_file = DRGB_FILE.format(frame_id=frame_id)
-    drgb_path = os.path.join(data_path, drgb_file)
-    depth_img = Image.open(drgb_path) # np.uin8
-    return np.array(depth_img)
-
-def load_edge_coords(data_path, frame_id):
-    edge_file = EDGE_FILE.format(frame_id=frame_id)
-    edge_path = os.path.join(data_path, edge_file)
-    edge_pixels = np.load(edge_path)
-    return edge_pixels
-
-def load_edge_mask(data_path, frame_id, shape=(480, 640), edge_width=3):
-    edge_pixels = load_edge_coords(data_path, frame_id)
-    edge_mask = coord_to_mask(shape, edge_pixels, thickness=edge_width) # np.uin8
-    return np.array(edge_mask)
 
 def take_items(items, start=0, end=np.inf, n=np.inf, step=1):
     """Take n items from the specified slice (start,end) and return list of numpy.array or torch.tensor"""
@@ -198,6 +160,7 @@ def compute_visible_pixels(size, p):
 
 def coord_to_mask(shape, yx, thickness=1):
     """Convert pixel coordinates of a shape into a binary mask"""
+    shape = shape[:2]
     xy = yx[:, [1,0]]
     mask = np.zeros(shape, dtype=np.uint8)
     mask = cv2.polylines(mask, [xy], False, 255, thickness, cv2.LINE_8)
@@ -231,10 +194,13 @@ def set_roi(image, num_corners=5):
     plt.waitforbuttonpress()
     
     return roi_corners
-    
-def show_image(image, h=10, w=10, cmap=None):
+
+def prepare_show_image(image, h=10, w=10, cmap=None):
     plt.figure(figsize=(w,h))
     plt.imshow(image, cmap=cmap)
+
+def show_image(image, h=10, w=10, cmap=None):
+    prepare_show_image(image, h, w, cmap)
     plt.show()
     
 def show_shapes(image, shapes2pixels, shapeIdx='all', cmap=None):
@@ -266,11 +232,15 @@ def show_corners(image, corners, h=10, w=10, cmap="gray"):
     plt.scatter(corners[:, 1], corners[:, 0], color="red", marker="x")
     plt.show()
 
-def show_overlay(image, mask):
-    """Overlay a binary mask on top of RGB image"""
+def prepare_overlay(image, mask):
     overlaid = image.copy()
     color = (0, 0, 0) if len(image.shape) == 3 else 255
     overlaid[mask == 255] = color
+    return overlaid
+
+def show_overlay(image, mask):
+    """Overlay a binary mask on top of RGB image"""
+    overlaid = prepare_overlay(image, mask)
     show_image(overlaid)
 
 def show_image_pairs(left, right, h=15, w=15):

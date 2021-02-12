@@ -4,14 +4,14 @@ import json
 import os
 
 import numpy as np
+from PIL import Image
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms as T
 from torchvision.transforms import functional as F
 
-from utils.helpers import load_darr, load_rgb, load_drgb, load_edge_mask, take_items
+from utils.helpers import coord_to_mask, take_items
 
-ID_FILE = "{folder_id}_ids.txt"
 TIME_FILE = "{folder_id}_time.json"
 
 T_MAP = {
@@ -35,20 +35,24 @@ class FurrowDataset(Dataset):
 
         # Input transforms
         t_list = []
-        t_ids = self.data_args["input_trans"]
+        t_ids = self.data_args.get("input_trans", [])
         for t_id in t_ids:
             t_list.append(T_MAP[t_id])
         self.input_trans = T.Compose(t_list)
         
         # Output transforms
         t_list = []
-        t_ids = self.data_args["target_trans"]
+        t_ids = self.data_args.get("target_trans", [])
         for t_id in t_ids:
             t_list.append(T_MAP[t_id])
         self.target_trans = T.Compose(t_list)
         
-        self.frame_ids = []
+        self.unique_frame_ids = []
         self.timestamps = {}
+        self.rgb_files = []
+        self.darr_files = []
+        self.edge_files = []
+        self.drgb_files = []
         self.size = 0
         
         start = data_args.get("start", 0)
@@ -56,7 +60,7 @@ class FurrowDataset(Dataset):
         max_frames = data_args.get("max_frames", np.inf)
         step = data_args.get("step", 1)
         self.read_frame_metadata()
-        self.frame_count = len(self.frame_ids)
+        self.unique_frame_count = len(self.unique_frame_ids)
         self.take_frames(start, end, max_frames, step)
 
     def get_args(self):
@@ -75,7 +79,7 @@ class FurrowDataset(Dataset):
         for file in files:
             file_path = os.path.join(data_path, file)
             assert os.path.isfile(file_path), f"{file_path} is not a file!"
-            assert file.endswith(("ids.txt", "depth.npy", "pts.npy", "rgb.png", "depth.png", "vis.png", "time.json")),\
+            assert file.endswith(("depth.npy", "pts.npy", "rgb.png", "depth.png", "vis.png", "time.json")),\
                 f"{file} has an unknown extension!"
 
     def read_frame_metadata(self):
@@ -83,10 +87,23 @@ class FurrowDataset(Dataset):
         data_path = self.data_args['data_path']
         load_time = self.data_args.get("load_time", False)
         folder_id = os.path.basename(data_path)
+        files = os.listdir(data_path)
+        
+        # Build an index set for frames available
+        frame_ids = set()
+        for file in files:
+            metadata = file.split("_")
+            frame_id = int(metadata[0])
+            frame_ids.add(frame_id)
+        
+        # Filter out timestamp file from index (if exists)
+        try:
+            prefix = int(folder_id.split("_")[0])
+            frame_ids.remove(prefix)
+        except ValueError:
+            pass
 
-        file = ID_FILE.format(folder_id=folder_id)
-        path = os.path.join(data_path, file)
-        self.frame_ids = np.sort(np.loadtxt(path).astype(np.int64))
+        self.unique_frame_ids = list(frame_ids)
 
         if load_time:
             file = TIME_FILE.format(folder_id=folder_id)
@@ -96,62 +113,111 @@ class FurrowDataset(Dataset):
 
     def take_frames(self, start=0, end=np.inf, max_frames=np.inf, step=1):
         """Shrink the number of frames to read according to given range and count"""
-        self.frame_ids = take_items(self.frame_ids, start, end, max_frames, step)
+        data_path = self.data_args['data_path']
+        files = os.listdir(data_path)
+        self.unique_frame_ids = take_items(self.unique_frame_ids, start, end, max_frames, step)
+        
+        selection = list(filter(lambda x: int(x.split("_")[0]) in self.unique_frame_ids, files))
+        rgb_files = list(filter(lambda x: x[-len('rgb.png'):] == 'rgb.png', selection))
+        darr_files = list(filter(lambda x: x[-len('depth.npy'):] == 'depth.npy', selection))
+        edge_files = list(filter(lambda x: x[-len('edge_pts.npy'):] == 'edge_pts.npy', selection))
+        drgb_files = list(filter(lambda x: x[-len('depth.png'):] == 'depth.png', selection))
+        self.rgb_files = sorted(rgb_files, key=lambda x: int(x.split("_")[0]))
+        self.darr_files = sorted(darr_files, key=lambda x: int(x.split("_")[0]))
+        self.edge_files = sorted(edge_files, key=lambda x: int(x.split("_")[0]))
+        self.drgb_files = sorted(drgb_files, key=lambda x: int(x.split("_")[0]))
 
     def __len__(self):
-        # Size <-> Number of frames
-        return len(self.frame_ids)
+        # Size <-> Number of frames (+ augmentations)
+        return len(self.rgb_files)
 
-    def __getitem__(self, idx):
+    def get_frame_files(self, idx, load_darr, load_rgb, load_drgb, load_edge, load_time):
+        # General purpose method to load data only
         data_path = self.data_args['data_path']
-        input_format = self.data_args.get("input_format", 'darr')
-        load_edge = self.data_args.get("load_edge", True)
-        shape = self.data_args.get("shape", (480, 640))
-        edge_width = self.data_args['edge_width']
-        load_time = self.data_args.get("load_time", False)
-        
-        frame_id = self.frame_ids[idx]
-        sample = {
+        frame_id = int(self.rgb_files[idx].split("_")[0])
+        frame_files = {
             "frame_id": frame_id
         }
 
-        # Loading data as specified:
-        
         # Load edge mask
         if load_edge:
-            edge_mask = load_edge_mask(data_path, frame_id, shape, edge_width)
+            edge_file = os.path.join(data_path, self.edge_files[idx])
+            frame_files['edge_pixels'] = np.load(edge_file)  # np.array: np.int64
+
+        # Load depth as array only
+        if load_darr:
+            darr_file = os.path.join(data_path, self.darr_files[idx])
+            frame_files['depth_arr'] = np.load(darr_file)    # np.array: np.float64
+
+        # Load RGB image only
+        if load_rgb:
+            rgb_file = os.path.join(data_path, self.rgb_files[idx])
+            frame_files['rgb_img'] = Image.open(rgb_file)    # PIL.Image: np.uint8
+        
+        # Load depth as image only
+        # if load_drgb:
+        #     drgb_file = os.path.join(data_path, self.drgb_files[idx])
+        #     frame_files['depth_img'] = Image.open(drgb_file) # PIL.Image: np.uint8
+
+        # Load timestamps
+        # if load_time:
+        #     frame_files['time'] = self.timestamps[str(frame_id)]
+        
+        return frame_files
+        
+    def __getitem__(self, idx):
+        # torch.utils.data.DataLoader class specific method: 
+        # 1) Loads data with get_frame_files
+        # 2) Adjusts input channels (if necessary)
+        # 3) Applies torch transforms
+
+        # Loading data as specified:
+        input_format = self.data_args.get("input_format", 'darr')
+        load_edge = self.data_args.get("load_edge", True)
+        load_darr = input_format in ('darr', 'rgb-darr')
+        load_rgb = input_format in ('rgb', 'rgb-darr', 'rgb-drgb')
+        load_drgb = input_format in ('drgb', 'rgb-drgb')
+        load_time = self.data_args.get("load_time", False)
+        shape = self.data_args.get("shape", (480, 640))
+        edge_width = self.data_args['edge_width']
+        
+        frame_files = self.get_frame_files(idx, load_darr, load_rgb, load_drgb, load_edge, load_time)
+        sample = {
+            "frame_id": frame_files["frame_id"]
+        }
+        
+        # Target: edge_pixels -> edge_mask -> transform (if loaded)
+        if load_edge:
+            edge_pixels = frame_files['edge_pixels']
+            edge_mask = coord_to_mask(shape, edge_pixels, thickness=edge_width) # np.uint8
             sample['target'] = self.target_trans(edge_mask)
         
-        # Load timestamps
-        if load_time:
-            sample['time'] = self.timestamps[str(frame_id)]
-        
-        # Load depth as array only (C:1) -> (C:3)
+        # Input Option-1: depth_arr: (C:1) -> (C:3) -> transform (if loaded)
         if input_format == "darr":
-            depth_arr = load_darr(data_path, frame_id)
-            depth_arr = np.stack([depth_arr, depth_arr, depth_arr], axis=-1)
+            depth_arr = frame_files['depth_arr']
+            depth_arr = np.rint(255 * (depth_arr / depth_arr.max()))         # Expand range to [0, 255]
+            depth_arr = depth_arr.astype(np.uint8)                           # np.float64 -> np.uint8
+            depth_arr = np.stack([depth_arr, depth_arr, depth_arr], axis=-1) # (C:1) -> (C:3)
             sample['input'] = self.input_trans(depth_arr) # TODO: This might be made optional
 
-        # Load RGB image only (C:3)
+        # Input Option-2: rgb_img: (C:3) -> transform (if loaded)
         elif input_format == "rgb":
-            rgb_img = load_rgb(data_path, frame_id)
-            sample['input'] = self.input_trans(rgb_img)
+            sample['input'] = self.input_trans(frame_files['rgb_img'])
         
-        # Load depth as image only  (C:3)
+        # Input Option-3: depth_img: (C:3) -> transform (if loaded)
         elif input_format == "drgb":
-            depth_img = load_drgb(data_path, frame_id)
-            sample['input'] = self.input_trans(depth_img)
+            sample['input'] = self.input_trans(frame_files['depth_img'])
         
-        # Load RGB + Depth as array (C:3+1)
+        # Input Option-4: rgb_img + depth_arr: (C:3) + (C:1) -> (C:4) -> transform (if loaded)
         elif input_format == "rgb-darr":
-            rgb_img = self.input_trans(load_rgb(data_path, frame_id))
-            depth_arr = self.input_trans(load_darr(data_path, frame_id))
+            rgb_img = self.input_trans(frame_files['rgb_img'])
+            depth_arr = self.input_trans(frame_files['depth_arr'])
             sample['input'] = torch.cat((rgb_img, depth_arr), dim=-1)
         
-        # Load RGB + Depth as image (C:3+3)
+        # Input Option-5: rgb_img + depth_img: (C:3) + (C:3) -> (C:6) -> transform (if loaded)
         elif input_format == "rgb-drgb":
-            rgb_img = self.input_trans(load_rgb(data_path, frame_id))
-            depth_img = self.input_trans(load_drgb(data_path, frame_id))
+            rgb_img = self.input_trans(frame_files['rgb_img'])
+            depth_img = self.input_trans(frame_files['depth_img'])
             sample['input'] = torch.cat((rgb_img, depth_img), dim=-1)
 
         else:
@@ -161,7 +227,7 @@ class FurrowDataset(Dataset):
 
     def __str__(self):
         data_path = self.data_args['data_path']
-        input_format = self.data_args.get("input_format", 'darr')
+        input_format = self.data_args.get("input_format", None)
         load_darr = input_format in ('darr', 'rgb-darr')
         load_rgb = input_format in ('rgb', 'rgb-darr', 'rgb-drgb')
         load_drgb = input_format in ('drgb', 'rgb-drgb')
@@ -170,7 +236,8 @@ class FurrowDataset(Dataset):
         
         info = "Status of dataset:\n"+\
                f"* Dataset path: {data_path}\n"+\
-               f"* Number of frames: Fetched/Total: {len(self.frame_ids)}/{self.frame_count}\n"+\
+               f"* Number of files loaded: : {len(self)}\n"+\
+               f"* Number of frames: Fetched/Total: {len(self.unique_frame_ids)}/{self.unique_frame_count}\n"+\
                f"* Input format: {input_format}\n"+\
                f"* Load depth as array: {load_darr}\n"+\
                f"* Load RGB: {load_rgb}\n"+\
@@ -178,53 +245,3 @@ class FurrowDataset(Dataset):
                f"* Load edge coordinates (ground truth): {load_edge}\n"+\
                f"* Load timestamps: {load_time}\n"
         return info
-
-def main():
-    data_args = {
-        "data_path": "dataset/20201112_140127",
-        "load_darr": True,
-        "load_edge": False,
-        "load_rgb": False,
-        "load_drgb": False,
-        "load_time": False,
-        "start": 0,
-        "end": 100,
-        "max_frames": np.inf,
-    }
-    
-    dataset = FurrowDataset(data_args)
-    print(dataset)
-    print(dataset.frame_ids)
-    size = len(dataset)
-
-    from utils.helpers import show_image, show_image_pairs, coord_to_mask
-    rand_idx = np.random.randint(0, size)
-    item = dataset.__getitem__(rand_idx)
-    print(item)
-    frame_id = item["frame_id"]
-
-    print(f"Random Index: {rand_idx} <-> Frame ID: {frame_id}")
-
-    shape = (480, 640)
-    if data_args["load_darr"]:
-        depth_arr = np.array(item['depth_arr'])
-        print(f"Depth array shape: {depth_arr.shape}")
-
-    if data_args["load_edge"]:
-        edge_mask = item['edge_mask']
-        show_image(edge_mask, cmap="gray")
-
-    if data_args["load_rgb"]:
-        rgb_img = np.array(item['rgb_img'])
-        show_image(rgb_img)
-
-    if data_args["load_drgb"]:
-        depth_img = np.array(item['depth_img'])
-        show_image(depth_img)
-
-    if data_args["load_time"]:
-        time = np.array(item['time'])
-        print(f"Timestamp: {time}")
-
-if __name__ == "__main__":
-    main()
