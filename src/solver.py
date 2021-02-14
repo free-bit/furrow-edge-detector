@@ -19,17 +19,17 @@ from utils.helpers import take_items
 
 EXIT = False
 
-def interrupt_handler(signum, frame):
-    global EXIT
+# def interrupt_handler(signum, frame):
+#     global EXIT
     
-    EXIT = not EXIT
+#     EXIT = not EXIT
 
-    if EXIT:
-        print("\nResuming execution.")
-    else:
-        print("\nTerminating.")
+#     if EXIT:
+#         print("\nResuming execution.")
+#     else:
+#         print("\nTerminating.")
 
-signal.signal(signal.SIGINT, interrupt_handler)
+# signal.signal(signal.SIGINT, interrupt_handler)
 
 optimizers = {
     "adam": torch.optim.Adam,
@@ -37,11 +37,11 @@ optimizers = {
     #...
 }
 
-def save_checkpoint(ckpt_path, epoch, model, optim, loss=None, acc=None):
+def save_checkpoint(ckpt_path, epoch, model, optim, loss=None, score=None):
     checkpoint = { 
         'epoch': epoch,
         'loss': loss,
-        'accuracy': acc,
+        'score': score,
         'model_args': model.get_args(),
         'model_state': model.state_dict(),
         'optim_name': str(optim.__class__).split('.')[2],
@@ -56,7 +56,7 @@ def load_checkpoint(ckpt_path):
     checkpoint = torch.load(ckpt_path)
     last_epoch = checkpoint["epoch"]
     last_loss = checkpoint["loss"]
-    last_acc = checkpoint["accuracy"]
+    last_score = checkpoint["score"]
     
     # Architecture is reinstantiated based on args saved
     model = RidgeDetector(checkpoint['model_args'])
@@ -68,7 +68,7 @@ def load_checkpoint(ckpt_path):
     # Recover state
     optim.load_state_dict(checkpoint['optim_state'])
 
-    return last_epoch, last_loss, last_acc, model, optim
+    return last_epoch, last_loss, last_score, model, optim
 
 def class_balanced_bce(logits, targets):
     total = np.prod(targets.shape[2:4])                      # total pixel count: scalar
@@ -83,25 +83,30 @@ def class_balanced_bce(logits, targets):
                                               weight=weights, 
                                               pos_weight=pos_weights, 
                                               reduction='mean')
+    print(logits.max()) # FIXME: NaN loss
+    print(logits.min())
 
     return loss
 
-# TODO: Check
 def f1_score(logits, targets, threshold=0.5):
     preds = torch.sigmoid(logits) > threshold
     
-    edge = preds.bool()
-    non_edge = ~edge
+    pred_edge = preds.bool()
+    pred_non_edge = ~pred_edge
     gt_edge = targets.bool()
     gt_non_edge = ~gt_edge
     
-    tp = (edge * gt_edge).sum(dim=(2,3))
-    fp = (edge * gt_non_edge).sum(dim=(2,3))
-    tn = (non_edge * gt_non_edge).sum(dim=(2,3))
+    tp = (pred_edge & gt_edge).sum(dim=(2,3))     # Pred: Edge,     Target: Edge
+    fp = (pred_edge & gt_non_edge).sum(dim=(2,3)) # Pred: Edge,     Target: Non-Edge
+    fn = (pred_non_edge & gt_edge).sum(dim=(2,3)) # Pred: Non-Edge, Target: Edge
     
     precision = tp / (tp + fp)
-    recall = tp / (tp + tn)
+    recall = tp / (tp + fn)
     f1 = (2 * precision * recall) / (precision + recall)
+    # tn = (pred_non_edge & gt_non_edge).sum(dim=(2,3)) # Pred: Non-Edge, Target: Non-Edge
+    # total = np.prod(preds.shape[2:4])
+    # tn = total - (tp + fp + fn)
+    # acc = (tp + tn) / (tp + fp + tn + fn)
 
     f1[f1 != f1] = 0 # nan -> 0 TODO: Change when not needed
 
@@ -200,9 +205,9 @@ class Solver(object):
 
     def clear_history(self):
         self.train_loss_hist = []
-        self.train_metric_hist = []
+        self.train_score_hist = []
         self.val_loss_hist = []
-        self.val_metric_hist = []
+        self.val_score_hist = []
 
     def forward(self, model, X, targets):
         # X: Bx3xHxW | Bx4xHxW | Bx6xHxW
@@ -211,11 +216,11 @@ class Solver(object):
         # output: Bx1xHxW
         logits = model(X)
         loss = self.loss_func(logits, targets.expand_as(logits)) # Single loss value (averaged)
-        
-        output = logits.mean(dim=1, keepdims=True) # TODO: return all for visualization purposes
-        metric = self.metric_func(output, targets) # Single metric score (averaged)
+        # logits[:,0:5,:,:].mean(dim=1, keepdims=True)
+        # logits.mean(dim=1, keepdims=True)
+        score = self.metric_func(logits[:,5,:,:], targets) # Single metric score (averaged)
 
-        return output, loss, metric
+        return logits, loss, score
 
     def backward(self, optim, loss):
         loss.backward()
@@ -223,39 +228,47 @@ class Solver(object):
         optim.zero_grad()
 
     def run_one_epoch(self, epoch, loader, model, optim=None, args={}):
-        mode = "Train" if model.training else 'Validation'
+        mode = ""
+        log_freq = 0
+        vis_freq = 0
+        if model.training:
+            mode = "Train"
+            log_freq = args.get('train_log_freq', 0)
+            vis_freq = args.get('train_vis_freq', 0)
+        else:
+            mode = "Validation"
+            log_freq = args.get('val_log_freq', 0)
+            vis_freq = args.get('val_vis_freq', 0)
 
         input_format = args.get('input_format', 'darr')
-        log_freq = args.get('log_freq', 0)
-        vis_freq = args.get('vis_freq', 0)
         max_vis = args.get('max_vis', 5)
 
         writer = self.writers[mode]
         total_iter = len(loader)
         offset = (epoch-1) * total_iter
         losses = []
-        metrics = []
+        scores = []
         
         # iter: [1, total_iter]
         for iter, batch in enumerate(tqdm(loader), 1):
             X = batch['input'].to(self.device)
             targets = batch['target'].to(self.device)
-            logits, loss, metric = self.forward(model, X, targets)
+            logits, loss, score = self.forward(model, X, targets)
             if model.training:
                 self.backward(optim, loss)
 
-            loss = loss.item()     # Tensor -> float
-            metric = metric.item() # Tensor -> float
+            loss = loss.item()   # Tensor -> float
+            score = score.item() # Tensor -> float
             losses.append(loss)
-            metrics.append(metric)
+            scores.append(score)
 
             global_iter = iter + offset
             writer.add_scalar(f'Batch/Loss/', loss, global_iter)
-            writer.add_scalar(f'Batch/Metric/', metric, global_iter)
+            writer.add_scalar(f'Batch/Score/', score, global_iter)
             writer.flush()
 
             if log_freq > 0 and iter % log_freq == 0:
-                print(f"[Iteration {iter}/{total_iter}] {mode} loss/metric: {loss:.5f}/{metric:.5f}")
+                print(f"[Iteration {iter}/{total_iter}] {mode} loss/score: {loss:.5f}/{score:.5f}")
 
             if vis_freq > 0 and iter % vis_freq == 0:
                 preds = torch.sigmoid(logits)
@@ -266,9 +279,9 @@ class Solver(object):
 
     
         mean_loss = np.mean(losses)
-        mean_metric = np.mean(metrics)
+        mean_score = np.mean(scores)
 
-        return mean_loss, mean_metric
+        return mean_loss, mean_score
 
     def train(self, model, optim, train_loader, val_loader, train_args):
         model.to(self.device)
@@ -279,50 +292,50 @@ class Solver(object):
         ckpt_freq = train_args.get('ckpt_freq', 0)
         
         best_loss = np.inf
-        best_metric = -1
+        best_score = -1
         
         # epoch: [1, max_epochs]
         epoch = 0
         for epoch in range(1, max_epochs+1):
             # Perform a full pass over training data
             model.train()
-            mean_train_loss, mean_train_metric = self.run_one_epoch(epoch, train_loader, model, optim, train_args)
+            mean_train_loss, mean_train_score = self.run_one_epoch(epoch, train_loader, model, optim, train_args)
 
-            print(f"[Epoch {epoch}/{max_epochs}] Train mean loss/metric: {mean_train_loss:.5f}/{mean_train_metric:.5f}")
+            print(f"[Epoch {epoch}/{max_epochs}] Train mean loss/score: {mean_train_loss:.5f}/{mean_train_score:.5f}")
 
             self.train_loss_hist.append(mean_train_loss)
-            self.train_metric_hist.append(mean_train_metric)
+            self.train_score_hist.append(mean_train_score)
             
             self.writers['Train'].add_scalar('Epoch/Loss/', mean_train_loss, epoch)
-            self.writers['Train'].add_scalar('Epoch/Metric/', mean_train_metric, epoch)
+            self.writers['Train'].add_scalar('Epoch/Score/', mean_train_score, epoch)
             self.writers['Train'].flush()
 
             # Perform a full pass over validation data (according to specified period)
             mean_val_loss = np.inf
-            mean_val_metric = -1
+            mean_val_score = -1
             if val_freq > 0 and epoch % val_freq == 0:
                 model.eval()
                 with torch.no_grad():
-                    mean_val_loss, mean_val_metric = self.run_one_epoch(epoch, val_loader, model, args=train_args)
+                    mean_val_loss, mean_val_score = self.run_one_epoch(epoch, val_loader, model, args=train_args)
                     
-                    print(f"[Epoch {epoch}/{max_epochs}] Validation mean loss/metric: {mean_val_loss:.5f}/{mean_val_metric:.5f}")
+                    print(f"[Epoch {epoch}/{max_epochs}] Validation mean loss/score: {mean_val_loss:.5f}/{mean_val_score:.5f}")
 
                     self.val_loss_hist.append(mean_val_loss)
-                    self.val_metric_hist.append(mean_val_metric)
+                    self.val_score_hist.append(mean_val_score)
 
                     self.writers['Validation'].add_scalar('Epoch/Loss/', mean_val_loss, epoch)
-                    self.writers['Validation'].add_scalar('Epoch/Metric/', mean_val_metric, epoch)
+                    self.writers['Validation'].add_scalar('Epoch/Score/', mean_val_score, epoch)
                     self.writers['Validation'].flush()
 
             # Checkpoint is disabled for ckpt_freq <= 0
             make_ckpt = False
             if ckpt_freq > 0: 
                 make_ckpt |= (epoch % ckpt_freq == 0) # Check for frequency
-                make_ckpt |= (mean_val_loss < best_loss and mean_val_metric > best_metric) # Check for val loss & metric score improvement
+                make_ckpt |= (mean_val_loss < best_loss and mean_val_score > best_score) # Check for val loss & metric score improvement
 
             # If checkpointing is enabled and save checkpoint periodically or whenever there is an improvement 
             if make_ckpt:
-                save_checkpoint(ckpt_path, epoch, model, optim, mean_val_loss, mean_val_metric)
+                save_checkpoint(ckpt_path, epoch, model, optim, mean_val_loss, mean_val_score)
 
             # When KeyboardInterrupt is triggered, perform a controlled termination
             if EXIT:

@@ -5,7 +5,7 @@ import os
 
 import numpy as np
 from PIL import Image
-from scipy.ndimage import shift, rotate
+# from scipy.ndimage import shift, rotate
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms as T
@@ -13,13 +13,17 @@ from torchvision.transforms import functional as F
 
 from utils.helpers import coord_to_mask, take_items
 
-TIME_FILE = "{folder_id}_time.json"
+DEPTH_EXT = "_depth.npy"	
+EDGE_EXT = "_edge_pts.npy"	
+RGB_EXT = "_rgb.png"	
+DRGB_EXT = "_depth.png"
+TIME_EXT = "_time.json"
 
 T_MAP = {
     "affine": F.affine,
-    "center_crop": F.center_crop,
-    "crop_right": T.Lambda(lambda x: F.crop(x, top=80, left=240, height=400, width=600)), # TODO: Make sure that transformed input is divisible by 16 
-    "crop_left": T.Lambda(lambda x: F.crop(x, top=80, left=0, height=400, width=600)),
+    "center_crop": T.Lambda(lambda x:  F.center_crop(x, output_size=[400,400])),
+    "crop_right": T.Lambda(lambda x: F.crop(x, top=80, left=240, height=400, width=400)),
+    "crop_left": T.Lambda(lambda x: F.crop(x, top=80, left=0, height=400, width=400)),
     "gaussian_blur": F.gaussian_blur,
     "normalize_imagenet": T.Lambda(lambda x: F.normalize(x, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])),
     "normalize_furrowset": T.Lambda(lambda x: F.normalize(x, mean=0.5, std=0.5)), # Pixel values in range: [-1,1] # TODO: Compute mean & variance in the dataset
@@ -27,7 +31,7 @@ T_MAP = {
     "rotate": F.rotate,
     "to_tensor": F.to_tensor, # Pixel values in range: [0,1]
 }
-
+# TODO: Test new dataset implementation, then extract new augmentations
 class FurrowDataset(Dataset):
 
     def __init__(self, data_args):
@@ -48,12 +52,9 @@ class FurrowDataset(Dataset):
             t_list.append(T_MAP[t_id])
         self.target_trans = T.Compose(t_list)
         
-        self.unique_frame_ids = []
+        self.frame_ids = []
+        self.tags = []
         self.timestamps = {}
-        self.rgb_files = []
-        self.darr_files = []
-        self.edge_files = []
-        self.drgb_files = []
         self.size = 0
         
         start = data_args.get("start", 0)
@@ -61,7 +62,7 @@ class FurrowDataset(Dataset):
         max_frames = data_args.get("max_frames", np.inf)
         step = data_args.get("step", 1)
         self.read_frame_metadata()
-        self.unique_frame_count = len(self.unique_frame_ids)
+        self.frame_count = len(self.frame_ids)
         self.take_frames(start, end, max_frames, step)
 
     def get_args(self):
@@ -90,84 +91,75 @@ class FurrowDataset(Dataset):
         folder_id = os.path.basename(data_path)
         files = os.listdir(data_path)
         
-        # Build an index set for frames available
-        frame_ids = set()
+        # Build an index based on RGB data (assuming always exists) for frames available
+        frame_ids = []
+        augs = []
         for file in files:
-            metadata = file.split("_")
-            frame_id = int(metadata[0])
-            frame_ids.add(frame_id)
+            if file.endswith(RGB_EXT):
+                metadata = file.split("_")
+                frame_ids.append(int(metadata[0])) # ID of the frame
+                aug_lst = metadata[1:-1]
+                if aug_lst:
+                    augs.append(aug_lst)           # Augmentation tag for the frame (if applied)
+
+        # Sort the index based on frame id
+        sort_indices = np.argsort(frame_ids)
+        self.frame_ids = [frame_ids[i] for i in sort_indices]
+        self.augs = [augs[i] for i in sort_indices] if augs else []
         
-        # Filter out timestamp file from index (if exists)
-        try:
-            prefix = int(folder_id.split("_")[0])
-            frame_ids.remove(prefix)
-        except ValueError:
-            pass
-
-        self.unique_frame_ids = list(frame_ids)
-
         if load_time:
-            file = TIME_FILE.format(folder_id=folder_id)
+            file = str(folder_id) + TIME_EXT
             path = os.path.join(data_path, file)
             with open(path) as f:
                 self.timestamps = json.load(f)
 
     def take_frames(self, start=0, end=np.inf, max_frames=np.inf, step=1):
         """Shrink the number of frames to read according to given range and count"""
-        data_path = self.data_args['data_path']
-        files = os.listdir(data_path)
-        self.unique_frame_ids = take_items(self.unique_frame_ids, start, end, max_frames, step)
-        
-        # TODO: Fix error here!!!!
-        selection = list(filter(lambda x: int(x.split("_")[0]) in self.unique_frame_ids, files))
-        rgb_files = list(filter(lambda x: x[-len('rgb.png'):] == 'rgb.png', selection))
-        darr_files = list(filter(lambda x: x[-len('depth.npy'):] == 'depth.npy', selection))
-        edge_files = list(filter(lambda x: x[-len('edge_pts.npy'):] == 'edge_pts.npy', selection))
-        drgb_files = list(filter(lambda x: x[-len('depth.png'):] == 'depth.png', selection))
-        self.rgb_files = sorted(rgb_files, key=lambda x: int(x.split("_")[0]))
-        self.darr_files = sorted(darr_files, key=lambda x: int(x.split("_")[0]))
-        self.edge_files = sorted(edge_files, key=lambda x: int(x.split("_")[0]))
-        self.drgb_files = sorted(drgb_files, key=lambda x: int(x.split("_")[0]))
+        self.frame_ids = take_items(self.frame_ids, start, end, max_frames, step)
+        self.augs = take_items(self.augs, start, end, max_frames, step)
 
     def __len__(self):
-        # Size <-> Number of frames (+ augmentations)
-        return len(self.rgb_files)
+        # Size <-> Number of frames
+        return len(self.frame_ids)
 
     def get_frame_files(self, idx, load_darr, load_rgb, load_drgb, load_edge, load_time):
         # General purpose method to load data only
         data_path = self.data_args['data_path']
-        keys = self.rgb_files[idx].split("_")
         
-        frame_id = keys[0]
+        frame_id = self.frame_ids[idx]
+        augs, tag = [], ''
+        if self.augs:
+            augs = self.augs[idx]
+            tag = "_" + "_".join(augs)
+
         frame_files = {
-            "frame_id": int(frame_id),
-            "augs": keys[1:-1]
+            "frame_id": frame_id,
+            "augs": augs
         }
-        print(idx)
-        print(frame_id)
-        print(self.rgb_files[idx])
-        print(self.edge_files[idx])
-        print(self.darr_files[idx])
 
         # Load edge mask
         if load_edge:
-            edge_file = os.path.join(data_path, self.edge_files[idx])
+            edge_file = str(frame_id) + tag + EDGE_EXT
+            edge_file = os.path.join(data_path, edge_file)
             frame_files['edge_pixels'] = np.load(edge_file)  # np.array: np.int64
 
         # Load depth as array only
         if load_darr:
-            darr_file = os.path.join(data_path, self.darr_files[idx])
+            darr_file = str(frame_id) + tag + DEPTH_EXT
+            darr_file = os.path.join(data_path, darr_file)
             frame_files['depth_arr'] = np.load(darr_file)    # np.array: np.float64
 
         # Load RGB image only
         if load_rgb:
-            rgb_file = os.path.join(data_path, self.rgb_files[idx])
+            rgb_file = str(frame_id) + tag + RGB_EXT
+            rgb_file = os.path.join(data_path, rgb_file)
             frame_files['rgb_img'] = Image.open(rgb_file)    # PIL.Image: np.uint8
         
         # Load depth as image only
-        # if load_drgb:
-        #     drgb_file = os.path.join(data_path, self.drgb_files[idx])
-        #     frame_files['depth_img'] = Image.open(drgb_file) # PIL.Image: np.uint8
+        if load_drgb:
+            drgb_file = str(frame_id) + tag + DRGB_EXT
+            drgb_file = os.path.join(data_path, drgb_file)
+            frame_files['depth_img'] = Image.open(drgb_file) # PIL.Image: np.uint8
 
         # Load timestamps
         # if load_time:
@@ -260,8 +252,7 @@ class FurrowDataset(Dataset):
         
         info = "Status of dataset:\n"+\
                f"* Dataset path: {data_path}\n"+\
-               f"* Number of files loaded: {len(self)}\n"+\
-               f"* Number of frames loaded/total: {len(self.unique_frame_ids)}/{self.unique_frame_count}\n"+\
+               f"* Number of frames loaded/total: {len(self.frame_ids)}/{self.frame_count}\n"+\
                f"* Input format: {input_format}\n"+\
                f"* Load depth as array: {load_darr}\n"+\
                f"* Load RGB: {load_rgb}\n"+\

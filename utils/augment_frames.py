@@ -84,8 +84,8 @@ def rotate_item(item, degrees, shape=(480, 640)):
     return modified
 
 def apply_random_augment(item, **kwargs):
-    tx_low = kwargs.get('tx_low', -250)
-    tx_high = kwargs.get('tx_high', 250)
+    tx_low = kwargs.get('tx_low', -230)
+    tx_high = kwargs.get('tx_high', 170)
     deg_low = kwargs.get('deg_low', -10)
     deg_high = kwargs.get('deg_high', 10)
 
@@ -97,6 +97,7 @@ def apply_random_augment(item, **kwargs):
         if aug == 'm':
             modified = mirror_item(modified)
             tag += "m_"
+            tx_low, tx_high = -tx_high, -tx_low
         
         elif aug == 't':
             tx = sample_from_range(tx_low, tx_high)
