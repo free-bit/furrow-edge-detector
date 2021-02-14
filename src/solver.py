@@ -70,25 +70,12 @@ def load_checkpoint(ckpt_path):
 
     return last_epoch, last_loss, last_acc, model, optim
 
-def topk(arr, k, largest=True):
-    """Find top k elements in D dimensional array and return values (k,) and indices (kxD)"""
-    assert k > 0, "k({}) has to be positive.".format(k)
-    flat_arr = np.ravel(arr)
-    # np.argsort sorts in ascending order, take last n elements in reverse order
-    topk = np.arange(k)
-    if largest:
-        topk = -(topk + 1)
-    flat_top_idxs = np.argsort(flat_arr)[topk]
-    top_idxs = np.unravel_index(flat_top_idxs, arr.shape)
-    top_vals = arr[top_idxs]
-    return (top_vals, np.array(list(zip(*top_idxs))))
-
 def class_balanced_bce(logits, targets):
     total = np.prod(targets.shape[2:4])                      # total pixel count: scalar
-    pos_count = torch.sum(targets, dim=(2,3), keepdim=True)  # + count per image: Nx6x1x1
-    neg_count = total - pos_count                            # - count per image: Nx6x1x1
-    pos_weights = targets * (neg_count / pos_count)          # b / (1 - b) term:  Nx6xHxW
-    weights = torch.ones_like(targets) * (pos_count / total) # (1 - b) term:      Nx6xHxW
+    pos_count = torch.sum(targets, dim=(2,3), keepdim=True)  # + count per image: Bx6x1x1
+    neg_count = total - pos_count                            # - count per image: Bx6x1x1
+    pos_weights = targets * (neg_count / pos_count)          # b / (1 - b) term:  Bx6xHxW
+    weights = torch.ones_like(targets) * (pos_count / total) # (1 - b) term:      Bx6xHxW
 
     # BCE with Logits == Sigmoid(Logits) + Weighted BCE:
     # weights * [pos_weights * y * -log(sigmoid(logits)) + (1 - y) * -log(1 - sigmoid(x))]
@@ -99,6 +86,7 @@ def class_balanced_bce(logits, targets):
 
     return loss
 
+# TODO: Check
 def f1_score(logits, targets, threshold=0.5):
     preds = torch.sigmoid(logits) > threshold
     
@@ -133,7 +121,6 @@ def revert_input_transforms(X, input_format):
 
     return X_lst
 
-# TODO: prepare_batch_visualization has to adapt input channels 4 & 6 somehow
 def prepare_batch_visualization(batch_groups, start=0, end=np.inf, max_items=3):
     """Construct a grid from batch_groups (type: list). 
     
@@ -226,7 +213,7 @@ class Solver(object):
         loss = self.loss_func(logits, targets.expand_as(logits)) # Single loss value (averaged)
         
         output = logits.mean(dim=1, keepdims=True) # TODO: return all for visualization purposes
-        metric = self.metric_func(output, targets)  # Single metric score (averaged)
+        metric = self.metric_func(output, targets) # Single metric score (averaged)
 
         return output, loss, metric
 

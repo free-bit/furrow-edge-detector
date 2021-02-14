@@ -12,6 +12,19 @@ from pprint import pprint
 from scipy.cluster.hierarchy import dendrogram
 from sklearn.cluster import AgglomerativeClustering
 
+def topk(arr, k, largest=True):
+    """Find top k elements in D dimensional array and return values (k,) and indices (kxD)"""
+    assert k > 0, "k({}) has to be positive.".format(k)
+    flat_arr = np.ravel(arr)
+    # np.argsort sorts in ascending order, take last n elements in reverse order
+    topk = np.arange(k)
+    if largest:
+        topk = -(topk + 1)
+    flat_top_idxs = np.argsort(flat_arr)[topk]
+    top_idxs = np.unravel_index(flat_top_idxs, arr.shape)
+    top_vals = arr[top_idxs]
+    return (top_vals, np.array(list(zip(*top_idxs))))
+
 def take_items(items, start=0, end=np.inf, n=np.inf, step=1):
     """Take n items from the specified slice (start,end) and return list of numpy.array or torch.tensor"""
     size = len(items)

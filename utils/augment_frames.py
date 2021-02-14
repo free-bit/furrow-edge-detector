@@ -19,7 +19,7 @@ def sample_from_range(low, high):
 def mirror_item(item, shape=(480, 640)):
     """Return a mirrored copy of the item."""
     print("Flip about y-axis")
-    modified = {}
+    modified = {'frame_id': item['frame_id']}
     
     if "depth_arr" in item:
         modified["depth_arr"] = np.fliplr(item["depth_arr"])
@@ -40,7 +40,7 @@ def mirror_item(item, shape=(480, 640)):
 def translate_item(item, tx, ty=0):
     """Return a translated copy of the item."""
     print(f"Translation with: ({ty}, {tx}) pixels")
-    modified = {}
+    modified = {'frame_id': item['frame_id']}
 
     if "edge_pixels" in item:
         modified["edge_pixels"] = item["edge_pixels"] + [ty, tx]
@@ -61,7 +61,7 @@ def translate_item(item, tx, ty=0):
 def rotate_item(item, degrees, shape=(480, 640)):
     """Return a rotated copy of the item."""
     print(f"Rotation with: {degrees} degrees (ccw)")
-    modified = {}
+    modified = {'frame_id': item['frame_id']}
     
     if "depth_arr" in item:
         modified["depth_arr"] = rotate(item["depth_arr"], degrees, reshape=False, order=0)
@@ -134,23 +134,15 @@ def store_item(item, path):
         filename = str(frame_id) + tag + "depth.png"
         item["depth_img"].save(os.path.join(path, filename))
 
-    if "rgb_img" in item and "edge_pixels" in item:
-        rgb_img = np.array(item['rgb_img'])
-        edge_pixels = item['edge_pixels']
-        edge_mask = coord_to_mask(rgb_img.shape, edge_pixels, thickness=1)
-        overlaid = prepare_overlay(rgb_img, edge_mask)
-        overlaid = Image.fromarray(overlaid)
+    # if "rgb_img" in item and "edge_pixels" in item:
+    #     rgb_img = np.array(item['rgb_img'])
+    #     edge_pixels = item['edge_pixels']
+    #     edge_mask = coord_to_mask(rgb_img.shape, edge_pixels, thickness=1)
+    #     overlaid = prepare_overlay(rgb_img, edge_mask)
+    #     overlaid = Image.fromarray(overlaid)
         
-        filename = str(frame_id) + tag + "overlay.png"
-        overlaid.save(os.path.join(path, filename))
-
-    return item
-
-# To Dataloader:
-# shift_mask = np.ones(shape, dtype=np.uint8) * 255
-# modified['shift_mask'] = shift(shift_mask, [ty,tx])
-# rotate_mask = np.ones(shape, dtype=np.uint8) * 255
-# modified['rotate_mask'] = rotate(rotate_mask, degrees, reshape=False)
+    #     filename = str(frame_id) + tag + "overlay.png"
+    #     overlaid.save(os.path.join(path, filename))
 
 # Naming convention: 
 # frameid_tag_type, e.g. 3900_m_t-5_r10_edge_pts.npy
