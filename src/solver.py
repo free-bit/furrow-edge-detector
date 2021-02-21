@@ -14,7 +14,6 @@ from src.model import RidgeDetector
 from utils.helpers import take_items
 
 # TODO: 
-# Debug
 # More metrics
 
 EXIT = False
@@ -70,12 +69,22 @@ def load_checkpoint(ckpt_path):
 
     return last_epoch, last_loss, last_score, model, optim
 
-def class_balanced_bce(logits, targets):
-    total = np.prod(targets.shape[2:4])                      # total pixel count: scalar
-    pos_count = torch.sum(targets, dim=(2,3), keepdim=True)  # + count per image: Bx6x1x1
-    neg_count = total - pos_count                            # - count per image: Bx6x1x1
-    pos_weights = targets * (neg_count / pos_count)          # b / (1 - b) term:  Bx6xHxW
-    weights = torch.ones_like(targets) * (pos_count / total) # (1 - b) term:      Bx6xHxW
+def class_balanced_bce(logits, targets, pos_count=2000):
+    shape, device = targets.shape, targets.device
+    total = np.prod(shape[2:4])                                  # total pixel count: scalar
+    
+    # If expected count is provided, directly use it.
+    if pos_count > 0:
+        pos_count = torch.full((*shape[0:2], 1, 1), pos_count,   # + count per image: Bx6x1x1
+                                device=device)
+    
+    # Otherwise compute it from target.
+    else:
+        pos_count = torch.sum(targets, dim=(2,3), keepdim=True)  # + count per image: Bx6x1x1
+    
+    neg_count = total - pos_count                                # - count per image: Bx6x1x1
+    pos_weights = targets * (neg_count / pos_count)              # b / (1 - b) term:  Bx6xHxW
+    weights = torch.ones_like(targets) * (pos_count / total)     # (1 - b) term:      Bx6xHxW
 
     # BCE with Logits == Sigmoid(Logits) + Weighted BCE:
     # weights * [pos_weights * y * -log(sigmoid(logits)) + (1 - y) * -log(1 - sigmoid(x))]
@@ -83,8 +92,6 @@ def class_balanced_bce(logits, targets):
                                               weight=weights, 
                                               pos_weight=pos_weights, 
                                               reduction='mean')
-    print(logits.max()) # FIXME: NaN loss
-    print(logits.min())
 
     return loss
 
@@ -218,7 +225,7 @@ class Solver(object):
         loss = self.loss_func(logits, targets.expand_as(logits)) # Single loss value (averaged)
         # logits[:,0:5,:,:].mean(dim=1, keepdims=True)
         # logits.mean(dim=1, keepdims=True)
-        score = self.metric_func(logits[:,5,:,:], targets) # Single metric score (averaged)
+        score = self.metric_func(logits[:,5:6,:,:], targets) # Single metric score (averaged)
 
         return logits, loss, score
 
@@ -273,7 +280,7 @@ class Solver(object):
             if vis_freq > 0 and iter % vis_freq == 0:
                 preds = torch.sigmoid(logits)
                 X_lst = revert_input_transforms(X, input_format)
-                img_grid = prepare_batch_visualization([*X_lst, preds, targets], max_items=max_vis)
+                img_grid = prepare_batch_visualization([*X_lst, preds[:,5:6,:,:], targets], max_items=max_vis)
                 writer.add_image("Input/Prediction/Target", img_grid, global_step=global_iter)
                 writer.flush()
 
@@ -356,13 +363,13 @@ class Solver(object):
                 logits = model(X)
                 output = logits.mean(dim=1, keepdims=True) # TODO: Try out different stuff here, currently: mean(sideouts, fusion)
                 preds = torch.sigmoid(output)
-                
+
                 X_lst = revert_input_transforms(X, input_format)
-                img_grid = prepare_batch_visualization([*X_lst, preds, targets], max_items=max_vis)
+                img_grid = prepare_batch_visualization([*X_lst, preds[:,5:6,:,:], targets], max_items=max_vis)
                 self.writers['Test'].add_image("Input/Prediction/Target", img_grid, global_step=iter)
                 self.writers['Test'].flush()
 
-                results.append(preds)
+                # results.append(preds)
         
         return results
 

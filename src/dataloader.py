@@ -31,7 +31,7 @@ T_MAP = {
     "rotate": F.rotate,
     "to_tensor": F.to_tensor, # Pixel values in range: [0,1]
 }
-# TODO: Test new dataset implementation, then extract new augmentations
+
 class FurrowDataset(Dataset):
 
     def __init__(self, data_args):
