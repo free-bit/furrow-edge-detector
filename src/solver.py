@@ -95,7 +95,25 @@ def class_balanced_bce(logits, targets, pos_count=2000):
 
     return loss
 
-def f1_score(logits, targets, threshold=0.5):
+def accuracy(logits, targets, threshold=0.5, average=True):
+    preds = torch.sigmoid(logits) > threshold
+    total = np.prod(preds.shape[2:4])
+
+    pred_edge = preds.bool()
+    pred_non_edge = ~pred_edge
+    gt_edge = targets.bool()
+    gt_non_edge = ~gt_edge
+    
+    tp = (pred_edge & gt_edge).sum(dim=(2,3))         # Pred: Edge,     Target: Edge
+    tn = (pred_non_edge & gt_non_edge).sum(dim=(2,3)) # Pred: Non-Edge, Target: Non-Edge
+    accuracy = (tp + tn) / total
+    
+    if average:
+        accuracy = accuracy.mean()
+
+    return accuracy
+
+def f1_score(logits, targets, threshold=0.5, average=True):
     preds = torch.sigmoid(logits) > threshold
     
     pred_edge = preds.bool()
@@ -110,14 +128,15 @@ def f1_score(logits, targets, threshold=0.5):
     precision = tp / (tp + fp)
     recall = tp / (tp + fn)
     f1 = (2 * precision * recall) / (precision + recall)
-    # tn = (pred_non_edge & gt_non_edge).sum(dim=(2,3)) # Pred: Non-Edge, Target: Non-Edge
-    # total = np.prod(preds.shape[2:4])
-    # tn = total - (tp + fp + fn)
-    # acc = (tp + tn) / (tp + fp + tn + fn)
 
-    f1[f1 != f1] = 0 # nan -> 0 TODO: Change when not needed
+    f1[f1 != f1] = 0 # nan -> 0
 
-    return f1.mean()
+    if average:
+        f1 = f1.mean()
+        precision = precision.mean()
+        recall = recall.mean()
+
+    return f1
 
 unnormalize_imagenet = T.Compose([T.Normalize(mean=[ 0.,0.,0.], std=[1/0.229,1/0.224,1/0.225 ]),
                                   T.Normalize(mean=[-0.485,-0.456,-0.406], std=[1.,1.,1.])])
@@ -189,7 +208,8 @@ LOSSES = {
 }
 
 METRICS = {
-    "f1": f1_score
+    "f1": f1_score,
+    "accuracy": accuracy,
 }
 
 class Solver(object):

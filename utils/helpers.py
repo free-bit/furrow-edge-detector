@@ -211,6 +211,8 @@ def set_roi(image, num_corners=5):
 def prepare_show_image(image, h=10, w=10, cmap=None):
     plt.figure(figsize=(w,h))
     plt.imshow(image, cmap=cmap)
+    # plt.grid(True)
+    # plt.xticks(np.arange(0, image.shape[1], 40))
 
 def show_image(image, h=10, w=10, cmap=None):
     prepare_show_image(image, h, w, cmap)

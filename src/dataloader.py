@@ -18,6 +18,7 @@ EDGE_EXT = "_edge_pts.npy"
 RGB_EXT = "_rgb.png"	
 DRGB_EXT = "_depth.png"
 TIME_EXT = "_time.json"
+MAX_DEPTH = 65.535
 
 T_MAP = {
     "affine": F.affine,
@@ -211,7 +212,7 @@ class FurrowDataset(Dataset):
         # Input Option-1: depth_arr: (C:1) -> (C:3) -> transform (if loaded)
         if input_format == "darr":
             depth_arr = frame_files['depth_arr']
-            depth_arr = np.rint(255 * (depth_arr / depth_arr.max()))         # Expand range to [0, 255]
+            depth_arr = np.rint(255 * (depth_arr / MAX_DEPTH))               # Expand range from [0, MAX_DEPTH] to [0, 255]
             depth_arr = depth_arr.astype(np.uint8)                           # np.float64 -> np.uint8
             depth_arr = np.stack([depth_arr, depth_arr, depth_arr], axis=-1) # (C:1) -> (C:3)
             sample['input'] = self.input_trans(depth_arr) # TODO: This might be made optional

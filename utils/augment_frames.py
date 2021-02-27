@@ -84,8 +84,6 @@ def rotate_item(item, degrees, shape=(480, 640)):
     return modified
 
 def apply_random_augment(item, **kwargs):
-    tx_low = kwargs.get('tx_low', -230)
-    tx_high = kwargs.get('tx_high', 170)
     deg_low = kwargs.get('deg_low', -10)
     deg_high = kwargs.get('deg_high', 10)
 
@@ -97,9 +95,13 @@ def apply_random_augment(item, **kwargs):
         if aug == 'm':
             modified = mirror_item(modified)
             tag += "m_"
-            tx_low, tx_high = -tx_high, -tx_low
         
         elif aug == 't':
+            left_most = modified["edge_pixels"].min(axis=0)[1]  # x coordinate for left-most edge pixel
+            right_most = modified["edge_pixels"].max(axis=0)[1] # x coordinate for right-most edge pixel
+            mid = (right_most + left_most) // 2                 # x coordinate for edge pixel in the middle
+            tx_high = 520 - mid
+            tx_low = 120 - mid
             tx = sample_from_range(tx_low, tx_high)
             modified = translate_item(modified, tx, ty=0)
             tag += f"t{tx}_"
@@ -149,18 +151,3 @@ def store_item(item, path):
 # frameid_tag_type, e.g. 3900_m_t-5_r10_edge_pts.npy
 # tag: transform sequence from left to right
 # type: file type and extension
-# Other possible strategy for shift:
-# min_x = item["edge_pixels"].min(axis=0)[1]
-# max_x = item["edge_pixels"].max(axis=0)[1]
-# mid_x = (max_x + min_x) / 2
-# margin = (max_x - mid_x) / 2
-# max_right = 640 - margin - mid_x
-# max_left = margin - mid_x
-# print("max_x:", max_x)
-# print("mid_x:", mid_x)
-# print("min_x:", min_x)
-# print("margin:", margin)
-# print("max_right:", max_right)
-# print("max_left:", max_left)
-# tx = np.random.randint(max_left, max_right+1)
-# print("tx:", tx)

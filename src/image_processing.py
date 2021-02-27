@@ -485,10 +485,8 @@ def apply_template_matching(depth_arr,
         show_image(template, cmap="gray")
 
     # Extract binary masks for contours
-    row = depth_arr[-1]
-    min_depth = start_depth # row[row>0].min()
-    row = depth_arr[0]
-    upper_limit = row.max()
+    min_depth = start_depth
+    upper_limit = 65.535
 
     contour_masks = []
     contour_infos = [] # For information in verbose mode (level-4) only
