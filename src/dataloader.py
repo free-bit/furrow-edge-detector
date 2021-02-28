@@ -18,7 +18,7 @@ EDGE_EXT = "_edge_pts.npy"
 RGB_EXT = "_rgb.png"	
 DRGB_EXT = "_depth.png"
 TIME_EXT = "_time.json"
-MAX_DEPTH = 65.535
+MAX_DEPTH = 65.53500311274547
 
 T_MAP = {
     "affine": F.affine,
@@ -53,6 +53,7 @@ class FurrowDataset(Dataset):
             t_list.append(T_MAP[t_id])
         self.target_trans = T.Compose(t_list)
         
+        self.folder_id = None
         self.frame_ids = []
         self.tags = []
         self.timestamps = {}
@@ -89,7 +90,7 @@ class FurrowDataset(Dataset):
         """Read file ids and timestamps under a single-folder dataset containing frames."""
         data_path = self.data_args['data_path']
         load_time = self.data_args.get("load_time", False)
-        folder_id = os.path.basename(data_path)
+        self.folder_id = os.path.basename(data_path)
         files = os.listdir(data_path)
         
         # Build an index based on RGB data (assuming always exists) for frames available
@@ -109,7 +110,7 @@ class FurrowDataset(Dataset):
         self.augs = [augs[i] for i in sort_indices] if augs else []
         
         if load_time:
-            file = str(folder_id) + TIME_EXT
+            file = str(self.folder_id) + TIME_EXT
             path = os.path.join(data_path, file)
             with open(path) as f:
                 self.timestamps = json.load(f)
@@ -117,7 +118,7 @@ class FurrowDataset(Dataset):
     def take_frames(self, start=0, end=np.inf, max_frames=np.inf, step=1):
         """Shrink the number of frames to read according to given range and count"""
         self.frame_ids = take_items(self.frame_ids, start, end, max_frames, step)
-        self.augs = take_items(self.augs, start, end, max_frames, step)
+        self.augs = take_items(np.array(self.augs, dtype=object), start, end, max_frames, step)
 
     def __len__(self):
         # Size <-> Number of frames
@@ -192,22 +193,6 @@ class FurrowDataset(Dataset):
             edge_pixels = frame_files['edge_pixels']
             edge_mask = coord_to_mask(shape, edge_pixels, thickness=edge_width) # np.uint8
             sample['target'] = self.target_trans(edge_mask)
-
-            # TODO: Keep or discard If data is augmented, compute a region of interest where loss is to be calculated.
-            # loss_mask = np.ones(shape, dtype=np.bool)
-            # augs = frame_files['augs']
-            # for aug in augs:
-            #     aug_type = aug[0]
-                
-            #     if aug_type == 't':
-            #         tx = int(aug[1:])
-            #         loss_mask = shift(loss_mask, [0,tx])
-                
-            #     elif aug_type == 'r':
-            #         degrees = int(aug[1:])
-            #         loss_mask = rotate(loss_mask, degrees, reshape=False, order=0)
-            
-            # sample['loss_mask'] = self.target_trans(loss_mask)
         
         # Input Option-1: depth_arr: (C:1) -> (C:3) -> transform (if loaded)
         if input_format == "darr":
@@ -251,13 +236,13 @@ class FurrowDataset(Dataset):
         load_edge = self.data_args.get("load_edge", True)
         load_time = self.data_args.get("load_time", False)
         
-        info = "Status of dataset:\n"+\
-               f"* Dataset path: {data_path}\n"+\
+        info = f"Status of {self.folder_id} dataset:\n"+\
                f"* Number of frames loaded/total: {len(self.frame_ids)}/{self.frame_count}\n"+\
                f"* Input format: {input_format}\n"+\
                f"* Load depth as array: {load_darr}\n"+\
                f"* Load RGB: {load_rgb}\n"+\
                f"* Load depth as RGB: {load_drgb}\n"+\
                f"* Load edge coordinates (ground truth): {load_edge}\n"+\
-               f"* Load timestamps: {load_time}\n"
+               f"* Load timestamps: {load_time}\n"+\
+               f"* Dataset path: {data_path}\n"
         return info

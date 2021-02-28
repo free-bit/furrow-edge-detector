@@ -1,5 +1,6 @@
+import json
 import os
-import signal
+# import signal
 
 import numpy as np
 import torch
@@ -219,11 +220,32 @@ class Solver(object):
         self.loss_func = LOSSES[loss_id]
         self.metric_func = METRICS[metric_id]
         self.device = solver_args["device"]
+        
         self.writers = {
             "Train": SummaryWriter(os.path.join(solver_args["log_path"], "train")),
             "Validation": SummaryWriter(os.path.join(solver_args["log_path"], "val")),
             "Test": SummaryWriter(os.path.join(solver_args["log_path"], "test")),
         }
+        
+        descr = "Purpose: " + solver_args["exp_info"]["descr"]
+        model_args = "Model: " + json.dumps(solver_args["exp_info"]["model"], indent=4)
+        optim_args = "Optimizer: " + json.dumps(solver_args["exp_info"]["optim"], indent=4)
+        self.writers["Train"].add_text(tag='Description', text_string=descr)
+        self.writers["Train"].add_text(tag="Description", text_string=model_args)
+        self.writers["Train"].add_text(tag="Description", text_string=optim_args)
+        
+        for i, arg in enumerate(solver_args["exp_info"]['train']):
+            text = json.dumps(arg, indent=4)
+            self.writers["Train"].add_text(tag='Train Data Args', text_string=text, global_step=i)
+        
+        for i, arg in enumerate(solver_args["exp_info"]['val']):
+            text = json.dumps(arg, indent=4)
+            self.writers["Validation"].add_text(tag='Validation Data Args', text_string=text, global_step=i)
+        
+        for i, arg in enumerate(solver_args["exp_info"]['test']):
+            text = json.dumps(arg, indent=4)
+            self.writers["Test"].add_text(tag='Test Data Args', text_string=text, global_step=i)
+
         self.clear_history()
         self.solver_args = solver_args
 
@@ -357,8 +379,12 @@ class Solver(object):
             # Checkpoint is disabled for ckpt_freq <= 0
             make_ckpt = False
             if ckpt_freq > 0: 
-                make_ckpt |= (epoch % ckpt_freq == 0) # Check for frequency
-                make_ckpt |= (mean_val_loss < best_loss and mean_val_score > best_score) # Check for val loss & metric score improvement
+                check_freq = (epoch % ckpt_freq == 0)                                       # Check for frequency
+                check_improve = (mean_val_loss < best_loss and mean_val_score > best_score) # Check for val loss & metric score improvement
+                make_ckpt = check_freq or check_improve
+                if check_improve:
+                    best_loss = mean_val_loss
+                    best_score = mean_val_score
 
             # If checkpointing is enabled and save checkpoint periodically or whenever there is an improvement 
             if make_ckpt:
