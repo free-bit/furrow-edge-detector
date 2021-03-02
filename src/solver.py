@@ -37,6 +37,12 @@ optimizers = {
     #...
 }
 
+def optim_to_device(optim, device):
+    for state in optim.state.values():
+        for k, v in state.items():
+            if torch.is_tensor(v):
+                state[k] = v.to(device)
+
 def save_checkpoint(ckpt_path, epoch, model, optim, loss=None, score=None):
     checkpoint = { 
         'epoch': epoch,
@@ -51,24 +57,30 @@ def save_checkpoint(ckpt_path, epoch, model, optim, loss=None, score=None):
     file = f'{epoch}_ckpt.pth'
     path = os.path.join(ckpt_path, file)
     torch.save(checkpoint, path)
+    print(f"Checkpoint saved at epoch-{epoch}.")
 
 def load_checkpoint(ckpt_path):
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     checkpoint = torch.load(ckpt_path)
     last_epoch = checkpoint["epoch"]
     last_loss = checkpoint["loss"]
     last_score = checkpoint["score"]
+    model_args = checkpoint['model_args']
+    optim_choice = checkpoint['optim_name']
+    optim_args = checkpoint['optim_args']
     
     # Architecture is reinstantiated based on args saved
-    model = RidgeDetector(checkpoint['model_args'])
+    model = RidgeDetector(model_args)
     # Recover state
     model.load_state_dict(checkpoint['model_state'])
+    model.to(device)
     # Optimizer is reinstantiated based on args saved
-    optim_name = "adam" # checkpoint['optim_name']
-    optim = optimizers[optim_name](filter(lambda p: p.requires_grad, model.parameters()), **checkpoint['optim_args'])
+    optim = optimizers[optim_choice](filter(lambda p: p.requires_grad, model.parameters()), **optim_args)
+    optim_to_device(optim, device)
     # Recover state
     optim.load_state_dict(checkpoint['optim_state'])
 
-    return last_epoch, last_loss, last_score, model, optim
+    return last_epoch, last_loss, last_score, model, optim, model_args, optim_choice, optim_args
 
 def class_balanced_bce(logits, targets, pos_count=2000):
     shape, device = targets.shape, targets.device
@@ -332,25 +344,26 @@ class Solver(object):
 
         return mean_loss, mean_score
 
-    def train(self, model, optim, train_loader, val_loader, train_args):
+    def train(self, model, optim, train_loader, val_loader, train_args, scheduler=None):
         model.to(self.device)
 
+        start_epoch = train_args.get('start_epoch', 1)
         ckpt_path = train_args['ckpt_path']
-        max_epochs = train_args.get('max_epochs', 10)
+        end_epoch = train_args.get('end_epoch', 10)
         val_freq = train_args.get('val_freq', 1)
         ckpt_freq = train_args.get('ckpt_freq', 0)
         
-        best_loss = np.inf
-        best_score = -1
+        mean_val_loss = best_loss = np.inf
+        mean_val_score = best_score = -1
         
-        # epoch: [1, max_epochs]
+        # epoch: [start_epoch, end_epoch]
         epoch = 0
-        for epoch in range(1, max_epochs+1):
+        for epoch in range(start_epoch, end_epoch+1):
             # Perform a full pass over training data
             model.train()
             mean_train_loss, mean_train_score = self.run_one_epoch(epoch, train_loader, model, optim, train_args)
 
-            print(f"[Epoch {epoch}/{max_epochs}] Train mean loss/score: {mean_train_loss:.5f}/{mean_train_score:.5f}")
+            print(f"[Epoch {epoch}/{end_epoch}] Train mean loss/score: {mean_train_loss:.5f}/{mean_train_score:.5f}")
 
             self.train_loss_hist.append(mean_train_loss)
             self.train_score_hist.append(mean_train_score)
@@ -360,14 +373,14 @@ class Solver(object):
             self.writers['Train'].flush()
 
             # Perform a full pass over validation data (according to specified period)
-            mean_val_loss = np.inf
-            mean_val_score = -1
             if val_freq > 0 and epoch % val_freq == 0:
                 model.eval()
                 with torch.no_grad():
                     mean_val_loss, mean_val_score = self.run_one_epoch(epoch, val_loader, model, args=train_args)
+                    if scheduler:
+                        scheduler.step(mean_val_score)
                     
-                    print(f"[Epoch {epoch}/{max_epochs}] Validation mean loss/score: {mean_val_loss:.5f}/{mean_val_score:.5f}")
+                    print(f"[Epoch {epoch}/{end_epoch}] Validation mean loss/score: {mean_val_loss:.5f}/{mean_val_score:.5f}")
 
                     self.val_loss_hist.append(mean_val_loss)
                     self.val_score_hist.append(mean_val_score)
@@ -393,6 +406,8 @@ class Solver(object):
             # When KeyboardInterrupt is triggered, perform a controlled termination
             if EXIT:
                 break
+
+        return epoch, mean_val_loss, mean_val_score
 
     def test(self, model, test_loader, test_args):
         model.to(self.device)
