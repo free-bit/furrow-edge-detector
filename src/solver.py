@@ -151,17 +151,24 @@ def f1_score(logits, targets, threshold=0.5, average=True):
 
     return f1
 
-unnormalize_imagenet = T.Compose([T.Normalize(mean=[ 0.,0.,0.], std=[1/0.229,1/0.224,1/0.225 ]),
-                                  T.Normalize(mean=[-0.485,-0.456,-0.406], std=[1.,1.,1.])])
+unnormalize_imagenet_3C = T.Compose([T.Normalize(mean=[0.,0.,0.], std=[1/0.229,1/0.224,1/0.225]),
+                                     T.Normalize(mean=[-0.485,-0.456,-0.406], std=[1.,1.,1.])])
+
+unnormalize_imagenet_1C = T.Compose([T.Normalize(mean=0., std=1/0.226),
+                                     T.Normalize(mean=-0.449, std=1.)])
 
 def revert_input_transforms(X, input_format):
     X_lst = []
     if input_format in ("darr", "rgb", "drgb"):
-        X_lst.append(unnormalize_imagenet(X))
-    
-    elif input_format in ("rgb-darr", "rgb-drgb"):
+        X_lst.append(unnormalize_imagenet_3C(X))
+
+    elif input_format == "rgb-darr":
         X1, X2 = torch.split(X, 3, dim=1)
-        X_lst.extend([unnormalize_imagenet(X1), unnormalize_imagenet(X2)])
+        X_lst.extend([unnormalize_imagenet_3C(X1), unnormalize_imagenet_1C(X2)])
+    
+    elif input_format in "rgb-drgb":
+        X1, X2 = torch.split(X, 3, dim=1)
+        X_lst.extend([unnormalize_imagenet_3C(X1), unnormalize_imagenet_3C(X2)])
 
     return X_lst
 

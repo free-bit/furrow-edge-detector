@@ -26,11 +26,13 @@ T_MAP = {
     "crop_right": T.Lambda(lambda x: F.crop(x, top=80, left=240, height=400, width=400)),
     "crop_left": T.Lambda(lambda x: F.crop(x, top=80, left=0, height=400, width=400)),
     "gaussian_blur": F.gaussian_blur,
-    "normalize_imagenet": T.Lambda(lambda x: F.normalize(x, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])),
+    "normalize_imagenet": {
+        "1C": T.Lambda(lambda x: F.normalize(x, mean=0.449, std=0.226)),
+        "3C": T.Lambda(lambda x: F.normalize(x, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])),
+    },
     "normalize_furrowset": T.Lambda(lambda x: F.normalize(x, mean=0.5, std=0.5)), # Pixel values in range: [-1,1] # TODO: Compute mean & variance in the dataset
     "resize": F.resize,
     "rotate": F.rotate,
-    "to_tensor": F.to_tensor, # Pixel values in range: [0,1]
 }
 
 class FurrowDataset(Dataset):
@@ -39,20 +41,6 @@ class FurrowDataset(Dataset):
         self.data_args = data_args
         self.validate_data_path()
 
-        # Input transforms
-        t_list = []
-        t_ids = self.data_args.get("input_trans", [])
-        for t_id in t_ids:
-            t_list.append(T_MAP[t_id])
-        self.input_trans = T.Compose(t_list)
-        
-        # Output transforms
-        t_list = []
-        t_ids = self.data_args.get("target_trans", [])
-        for t_id in t_ids:
-            t_list.append(T_MAP[t_id])
-        self.target_trans = T.Compose(t_list)
-        
         self.folder_id = None
         self.frame_ids = []
         self.tags = []
@@ -184,6 +172,14 @@ class FurrowDataset(Dataset):
         load_time = self.data_args.get("load_time", False)
         shape = self.data_args.get("shape", (480, 640))
         edge_width = self.data_args['edge_width']
+
+        input_trans = [F.to_tensor]  # Pixel values in range: [0,1]
+        target_trans = [F.to_tensor] # Pixel values in range: [0,1]
+        center_crop = self.data_args.get('center_crop', True)
+        normalize = self.data_args.get('normalize', True)
+        if center_crop:
+            input_trans.append(T_MAP['center_crop'])
+            target_trans.append(T_MAP['center_crop'])
         
         frame_files = self.get_frame_files(idx, load_darr, load_rgb, load_drgb, load_edge, load_time)
         sample = {}
@@ -192,7 +188,9 @@ class FurrowDataset(Dataset):
         if load_edge:
             edge_pixels = frame_files['edge_pixels']
             edge_mask = coord_to_mask(shape, edge_pixels, thickness=edge_width) # np.uint8
-            sample['target'] = self.target_trans(edge_mask)
+            
+            target_trans = T.Compose(target_trans)
+            sample['target'] = target_trans(edge_mask)
         
         # Input Option-1: depth_arr: (C:1) -> (C:3) -> transform (if loaded)
         if input_format == "darr":
@@ -200,27 +198,55 @@ class FurrowDataset(Dataset):
             depth_arr = np.rint(255 * (depth_arr / MAX_DEPTH))               # Expand range from [0, MAX_DEPTH] to [0, 255]
             depth_arr = depth_arr.astype(np.uint8)                           # np.float64 -> np.uint8
             depth_arr = np.stack([depth_arr, depth_arr, depth_arr], axis=-1) # (C:1) -> (C:3)
-            sample['input'] = self.input_trans(depth_arr) # TODO: This might be made optional
+            
+            if normalize:
+                input_trans.append(T_MAP['normalize_imagenet']['3C'])
+            input_trans = T.Compose(input_trans)
+            sample['input'] = input_trans(depth_arr) # TODO: This might be made optional
 
         # Input Option-2: rgb_img: (C:3) -> transform (if loaded)
         elif input_format == "rgb":
-            sample['input'] = self.input_trans(frame_files['rgb_img'])
+            if normalize:
+                input_trans.append(T_MAP['normalize_imagenet']['3C'])
+            input_trans = T.Compose(input_trans)
+            sample['input'] = input_trans(frame_files['rgb_img'])
         
         # Input Option-3: depth_img: (C:3) -> transform (if loaded)
         elif input_format == "drgb":
-            sample['input'] = self.input_trans(frame_files['depth_img'])
+            if normalize:
+                input_trans.append(T_MAP['normalize_imagenet']['3C'])
+            input_trans = T.Compose(input_trans)
+            sample['input'] = input_trans(frame_files['depth_img'])
         
         # Input Option-4: rgb_img + depth_arr: (C:3) + (C:1) -> (C:4) -> transform (if loaded)
         elif input_format == "rgb-darr":
-            rgb_img = self.input_trans(frame_files['rgb_img'])
-            depth_arr = self.input_trans(frame_files['depth_arr'])
-            sample['input'] = torch.cat((rgb_img, depth_arr), dim=-1)
+            rgb_trans = input_trans[:]
+            darr_trans = input_trans[:]
+            if normalize:
+                rgb_trans.append(T_MAP['normalize_imagenet']['3C'])
+                darr_trans.append(T_MAP['normalize_imagenet']['1C'])
+            rgb_trans = T.Compose(rgb_trans)
+            darr_trans = T.Compose(darr_trans)
+
+            rgb_img = frame_files['rgb_img']
+            rgb_img = rgb_trans(rgb_img)
+
+            depth_arr = frame_files['depth_arr']
+            depth_arr = np.rint(255 * (depth_arr / MAX_DEPTH))               # Expand range from [0, MAX_DEPTH] to [0, 255]
+            depth_arr = depth_arr.astype(np.uint8)                           # np.float64 -> np.uint8
+            depth_arr = darr_trans(depth_arr)
+            
+            sample['input'] = torch.cat((rgb_img, depth_arr), dim=0)
         
         # Input Option-5: rgb_img + depth_img: (C:3) + (C:3) -> (C:6) -> transform (if loaded)
         elif input_format == "rgb-drgb":
-            rgb_img = self.input_trans(frame_files['rgb_img'])
-            depth_img = self.input_trans(frame_files['depth_img'])
-            sample['input'] = torch.cat((rgb_img, depth_img), dim=-1)
+            if normalize:
+                input_trans.append(T_MAP['normalize_imagenet']['3C'])
+            input_trans = T.Compose(input_trans)
+
+            rgb_img = input_trans(frame_files['rgb_img'])
+            depth_img = input_trans(frame_files['depth_img'])
+            sample['input'] = torch.cat((rgb_img, depth_img), dim=0)
 
         else:
             raise NotImplementedError
