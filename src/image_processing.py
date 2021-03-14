@@ -436,16 +436,52 @@ def apply_hough_line(bin_image, visualize=True, print_lines=20, plot_hough_space
 
 def apply_template_matching(depth_arr,
                             template,
-                            start_depth=1.0,  # Given in depth-scale
-                            contour_width=25, # Given in y-scale
-                            y_step=5,         # Given in y-scale
+                            start_depth=1.0,
+                            contour_width=25,
+                            y_step=5,
                             n_contours=1000,
-                            dynamic_width=True,
                             ransac_thresh=15,
                             score_thresh=None,
-                            roi=[None,None,250,None], # min_y:max_y, min_x:max_x
+                            roi=[None,None,250,None],
                             fit_type="curve",
                             verbose=0):
+    """
+    Apply given template to the contours extracted from given depth_arr.
+    
+    Parameters
+    ----------
+    depth_arr : ndarray
+        Depth map, with shape HxW.
+    template : ndarray
+        Template to slide over contours, with shape NxN
+    start_depth : int
+        Initial depth value to define first edge of the contour (in terms of depth values)
+    contour_width : int
+        Thickness of the area between the two edges defining the contour (in terms of pixels)
+    y_step : int
+        Amount of shift to apply to the contour at every iteration (in terms of pixels)
+    n_contours : int
+        Maximum contours to be extracted
+    ransac_thresh : int
+        Maximum residual for a point to be classified as an inlier
+    score_thresh : float
+        Minimum correlation score to consider it as a detection
+    roi : list
+        Region of interest in which template matching is to be applied, expected format: [min_y, max_y, min_x, max_x]
+    fit_type : string
+        Model to fit to the set of inlier points, either 'line' or 'curve'
+    verbose : int
+        Logging verbosity, higher verbosity more details, defined levels: 0, 1, 2, 3
+
+    Returns 
+    -------
+    edge_pixels : ndarray
+        Pixel coordinates of model fitted to inliers, with shape Hx2
+    inliers : ndarray
+        Pixel coordinates of inlier points, with shape Nx2
+    outliers : ndarray
+        Pixel coordinate of outlier points, with shape Mx2
+    """
     params = locals()
 
     assert n_contours >= 2,\
@@ -489,7 +525,7 @@ def apply_template_matching(depth_arr,
     upper_limit = 65.535
 
     contour_masks = []
-    contour_infos = [] # For information in verbose mode (level-4) only
+    contour_infos = [] # For information in verbose mode (level-3) only
     for i in range(n_contours):
         ddepth = estimate_ddepth(min_depth, contour_width)
         max_depth = min_depth + ddepth
@@ -512,7 +548,7 @@ def apply_template_matching(depth_arr,
         combined_mask = np.bitwise_or.reduce(np.array(contour_masks), axis=0)
         show_image(combined_mask, cmap="gray")
     
-    # Perform detection
+    # Perform detection for each contour one-by-one
     detections = []
     for i, contour_mask in enumerate(contour_masks):
         contour_image = contour_mask.astype(np.float32)
@@ -571,6 +607,7 @@ def apply_template_matching(depth_arr,
     else:
         raise NotImplementedError
 
+    # Obtain pixel coordinates for the fitted model to inliers
     edge_pixels = compute_visible_pixels(depth_arr.shape, p)
     return edge_pixels, inliers, outliers
 
