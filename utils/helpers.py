@@ -174,8 +174,14 @@ def compute_visible_pixels(size, p):
 def coord_to_mask(shape, yx, thickness=1):
     """Convert pixel coordinates of a shape into a binary mask"""
     shape = shape[:2]
-    xy = yx[:, [1,0]]
     mask = np.zeros(shape, dtype=np.uint8)
+    
+    # Empty coordinate array means there is no edge pixel, return a blank mask in this case.
+    if len(yx) == 0:
+        return mask
+
+    # When there are edge pixels, mark them on the mask.
+    xy = yx[:, [1,0]]
     mask = cv2.polylines(mask, [xy], False, 255, thickness, cv2.LINE_8)
     mask = (mask.astype(np.bool) * 255).astype(np.uint8)
     return mask

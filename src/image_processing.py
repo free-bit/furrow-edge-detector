@@ -506,6 +506,7 @@ def apply_template_matching(depth_arr,
     else:
         min_x = 0
 
+    # Crop image to region of interest
     roi_arr = depth_arr[min_y:max_y, min_x:max_x]
     h, w = template.shape
 
@@ -573,8 +574,8 @@ def apply_template_matching(depth_arr,
             # Draw bounding box and center points for detections
             axs[1].set_title('Detected Point(s)')
             for y, x in corners:
-                axs[1].scatter(x-min_x, y-min_y, color="red", marker="x")
-                rect = plt.Rectangle([x-w/2-min_x, y-h/2-min_y], width=w, height=h, fill=False, ec="blue")
+                axs[1].scatter(x-min_x, y-min_y, color="lime", marker="x")
+                rect = plt.Rectangle([x-w/2-min_x, y-h/2-min_y], width=w, height=h, fill=False, ec="lime", linewidth=2)
                 axs[1].add_patch(rect)
             
             axs[1].imshow(contour_image, cmap = 'gray')

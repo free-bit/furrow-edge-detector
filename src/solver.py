@@ -14,9 +14,6 @@ from tqdm.auto import tqdm
 from src.model import RidgeDetector
 from utils.helpers import take_items
 
-# TODO: 
-# More metrics
-
 EXIT = False
 
 # def interrupt_handler(signum, frame):
@@ -173,7 +170,8 @@ def revert_input_transforms(X, input_format):
     return X_lst
 
 def prepare_batch_visualization(batch_groups, start=0, end=np.inf, max_items=3):
-    """Construct a grid from batch_groups (type: list). 
+    """
+    Construct a grid from batch_groups (type: list). 
     
     Each individual batch group is a batch of images (type: tensor) is with shape: B x C* x H x W.
     Order of individual batch group in batch_groups defines the order of images in columns.
@@ -360,7 +358,7 @@ class Solver(object):
         val_freq = train_args.get('val_freq', 1)
         ckpt_freq = train_args.get('ckpt_freq', 0)
         
-        mean_val_loss = best_loss = np.inf
+        mean_val_loss = np.inf
         mean_val_score = best_score = -1
         
         # epoch: [start_epoch, end_epoch]
@@ -399,11 +397,10 @@ class Solver(object):
             # Checkpoint is disabled for ckpt_freq <= 0
             make_ckpt = False
             if ckpt_freq > 0: 
-                check_freq = (epoch % ckpt_freq == 0)                                       # Check for frequency
-                check_improve = (mean_val_loss < best_loss and mean_val_score > best_score) # Check for val loss & metric score improvement
+                check_freq = (epoch % ckpt_freq == 0)         # Check for frequency
+                check_improve = (mean_val_score > best_score) # Check for metric score improvement
                 make_ckpt = check_freq or check_improve
                 if check_improve:
-                    best_loss = mean_val_loss
                     best_score = mean_val_score
 
             # If checkpointing is enabled and save checkpoint periodically or whenever there is an improvement 

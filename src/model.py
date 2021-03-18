@@ -7,6 +7,11 @@ class RidgeDetector(nn.Module):
         super().__init__()
 
         layers = vgg16(pretrained=model_args['pretrained']).features
+        freeze = model_args.get('freeze', False)
+        if freeze:
+            for param in layers.parameters():
+                param.requires_grad = False
+        
         input_format = model_args['input_format']
         self.model_args = model_args
 

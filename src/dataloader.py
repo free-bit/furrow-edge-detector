@@ -23,8 +23,7 @@ MAX_DEPTH = 65.53500311274547
 T_MAP = {
     "affine": F.affine,
     "center_crop": T.Lambda(lambda x:  F.center_crop(x, output_size=[400,400])),
-    "crop_right": T.Lambda(lambda x: F.crop(x, top=80, left=240, height=400, width=400)),
-    "crop_left": T.Lambda(lambda x: F.crop(x, top=80, left=0, height=400, width=400)),
+    "crop_down": T.Lambda(lambda x: F.crop(x, top=80, left=120, height=400, width=400)),
     "gaussian_blur": F.gaussian_blur,
     "normalize_imagenet": {
         "1C": T.Lambda(lambda x: F.normalize(x, mean=0.449, std=0.226)),
@@ -131,25 +130,28 @@ class FurrowDataset(Dataset):
         if load_edge:
             edge_file = str(frame_id) + tag + EDGE_EXT
             edge_file = os.path.join(data_path, edge_file)
-            frame_files['edge_pixels'] = np.load(edge_file)  # np.array: np.int64
+            try:
+                frame_files['edge_pixels'] = np.load(edge_file) # np.array: np.int64
+            except FileNotFoundError: # TODO: Add a flag to force an error if desired
+                frame_files['edge_pixels'] = []
 
         # Load depth as array only
         if load_darr:
             darr_file = str(frame_id) + tag + DEPTH_EXT
             darr_file = os.path.join(data_path, darr_file)
-            frame_files['depth_arr'] = np.load(darr_file)    # np.array: np.float64
+            frame_files['depth_arr'] = np.load(darr_file)       # np.array: np.float64
 
         # Load RGB image only
         if load_rgb:
             rgb_file = str(frame_id) + tag + RGB_EXT
             rgb_file = os.path.join(data_path, rgb_file)
-            frame_files['rgb_img'] = Image.open(rgb_file)    # PIL.Image: np.uint8
+            frame_files['rgb_img'] = Image.open(rgb_file)       # PIL.Image: np.uint8
         
         # Load depth as image only
         if load_drgb:
             drgb_file = str(frame_id) + tag + DRGB_EXT
             drgb_file = os.path.join(data_path, drgb_file)
-            frame_files['depth_img'] = Image.open(drgb_file) # PIL.Image: np.uint8
+            frame_files['depth_img'] = Image.open(drgb_file)    # PIL.Image: np.uint8
 
         # Load timestamps
         # if load_time:
@@ -175,11 +177,11 @@ class FurrowDataset(Dataset):
 
         input_trans = [F.to_tensor]  # Pixel values in range: [0,1]
         target_trans = [F.to_tensor] # Pixel values in range: [0,1]
-        center_crop = self.data_args.get('center_crop', True)
+        crop_down = self.data_args.get('crop_down', True)
         normalize = self.data_args.get('normalize', True)
-        if center_crop:
-            input_trans.append(T_MAP['center_crop'])
-            target_trans.append(T_MAP['center_crop'])
+        if crop_down:
+            input_trans.append(T_MAP['crop_down'])
+            target_trans.append(T_MAP['crop_down'])
         
         frame_files = self.get_frame_files(idx, load_darr, load_rgb, load_drgb, load_edge, load_time)
         sample = {}
