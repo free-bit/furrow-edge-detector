@@ -16,7 +16,7 @@ from utils.helpers import compute_visible_pixels, estimate_ddepth, topk, parabol
 
 def convert_grayscale(image, visualize=True, **kwargs): # **kwargs is ignored
     """Takes an RGB (3 channel) image, returns the grayscale image (1 channel)"""
-    print("Converting to grayscale")
+    # print("Converting to grayscale")
     image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     if visualize:
         show_image(image, cmap="gray")
@@ -70,6 +70,13 @@ def apply_threshold(gray_img, visualize=True, **kwargs):
     if visualize:
         show_image(gray_img, cmap="gray")
     return gray_img
+
+def apply_otsu_threshold(gray_img, visualize=True, **kwargs):
+    # print("Applying Otsu's threshold with args:", kwargs)
+    retval, gray_img = cv2.threshold(gray_img, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+    if visualize:
+        show_image(gray_img, cmap="gray")
+    return gray_img, retval
 
 def apply_channelwise_threshold(image, visualize=True, **kwargs):
     """Takes multi-channel image, applies different threshold per channel, returns thresholded version."""
@@ -179,7 +186,7 @@ def apply_bilateral_filter(image, visualize=True, **kwargs):
     return image
 
 def apply_gaussian_blur(image, visualize=True, **kwargs):
-    print("Applying Gaussian blur with args:", kwargs)
+    # print("Applying Gaussian blur with args:", kwargs)
     image = cv2.GaussianBlur(image, **kwargs)
     if visualize:
         show_image(image)
@@ -274,7 +281,7 @@ def apply_roberts(image, visualize=True, **kwargs):
 
 def apply_canny(image, visualize=True, **kwargs):
     """Takes an RGB or grayscale image, returns the binary mask for edge locations"""
-    print("Applying canny with args:", kwargs)
+    # print("Applying Canny with args:", kwargs)
     image = cv2.Canny(image, **kwargs)
     if visualize:
         show_image(image, cmap="gray")
@@ -621,6 +628,7 @@ preproc_funcs = {
     "Opening": apply_opening,
     "Closing": apply_closing,
     "Threshold": apply_threshold,
+    "Otsu Threshold": apply_otsu_threshold,
     "Adaptive Threshold": apply_adaptive_threshold,
     "Spatial Threshold": apply_spatial_threshold,
     "ROI Threshold": apply_roi_threshold,

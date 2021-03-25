@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torchvision.models import vgg16, resnet18
+from torchvision.models import vgg16
 
 class RidgeDetector(nn.Module):
     def __init__(self, model_args):

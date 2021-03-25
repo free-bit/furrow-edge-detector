@@ -6,6 +6,7 @@ import os
 
 import cv2
 from matplotlib import pyplot as plt
+from matplotlib import colors  
 import numpy as np
 import pandas as pd
 from pprint import pprint
@@ -220,8 +221,11 @@ def prepare_show_image(image, h=10, w=10, cmap=None):
     # plt.grid(True)
     # plt.xticks(np.arange(0, image.shape[1], 40))
 
-def show_image(image, h=10, w=10, cmap=None):
+def show_image(image, h=10, w=10, cmap=None, ticks=True):
     prepare_show_image(image, h, w, cmap)
+    if not ticks:
+        plt.xticks([])
+        plt.yticks([])
     plt.show()
     
 def show_shapes(image, shapes2pixels, shapeIdx='all', cmap=None):
@@ -253,16 +257,26 @@ def show_corners(image, corners, h=10, w=10, cmap="gray"):
     plt.scatter(corners[:, 1], corners[:, 0], color="red", marker="x")
     plt.show()
 
-def prepare_overlay(image, mask):
+def overlay_coord(image, yx, thickness=1, color='springgreen'):
     overlaid = image.copy()
-    color = (0, 0, 0) if len(image.shape) == 3 else 255
-    overlaid[mask == 255] = color
+    # Empty coordinate array means there is no edge pixel, do nothing
+    if len(yx) == 0:
+        return overlaid
+
+    # When there are edge pixels, mark them on the mask.
+    xy = yx[:, [1,0]]
+    color = [255 * x for x in colors.to_rgb(color)] if len(image.shape) == 3 else 255
+    overlaid = cv2.polylines(overlaid, [xy], False, color, thickness, cv2.LINE_8)
     return overlaid
 
-def show_overlay(image, mask):
-    """Overlay a binary mask on top of RGB image"""
-    overlaid = prepare_overlay(image, mask)
-    show_image(overlaid)
+def overlay_mask(image, mask, color='springgreen'):
+    """image and mask have to be in [0,1]"""
+    overlaid = image.copy() / 255
+    color = colors.to_rgb(color) if len(image.shape) == 3 else 1
+    alpha_fg = mask[:,:,np.newaxis]
+    alpha_bg = 1 - alpha_fg
+    overlaid = alpha_bg * overlaid + alpha_fg * np.array(color)
+    return np.clip(overlaid, 0, 1)
 
 def show_image_pairs(left, right, h=15, w=15):
     f, ax = plt.subplots(1,2)
@@ -365,7 +379,7 @@ def generate_lane_pixels(left, right, pixel_offset=0, num_lane=15):
     mid = np.rint((left + right) / 2).astype(np.int32)
     mid = mid[pixel_offset:]
     segments = np.array_split(mid, num_lane)
-    return np.concatenate(segments[::2], axis=0)
+    return segments[::2]
 
 def shift_pixels(depth_arr, pixel_coords, intrinsics, shift3D=[-0.25, 0, 0]):
     """

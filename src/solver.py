@@ -28,6 +28,8 @@ EXIT = False
 
 # signal.signal(signal.SIGINT, interrupt_handler)
 
+EPS = torch.finfo(torch.float64).eps
+
 optimizers = {
     "adam": torch.optim.Adam,
     "sgd": torch.optim.SGD,
@@ -137,7 +139,7 @@ def f1_score(logits, targets, threshold=0.5, average=True):
     
     precision = tp / (tp + fp)
     recall = tp / (tp + fn)
-    f1 = (2 * precision * recall) / (precision + recall)
+    f1 = (2 * precision * recall) / (precision + recall) # torch.maximum(EPS, (precision + recall))
 
     f1[f1 != f1] = 0 # nan -> 0
 
@@ -147,6 +149,37 @@ def f1_score(logits, targets, threshold=0.5, average=True):
         recall = recall.mean()
 
     return f1
+
+def o_scores(model, loader, num_t=100):
+    # TODO: Requires testing
+    # Scores to return
+    ois, ods = {}, {}
+    # Different threshold levels
+    thresholds = np.arange(0, 1, num_t)
+    # Table to store F1 scores per sample achieved at different threshold levels: N x num_t
+    sample_to_f1 = torch.zeros(len(loader), len(thresholds))
+
+    # Make one inference per image at all defined threshold levels
+    model.eval()
+    with torch.no_grad():
+        for i, sample in enumerate(loader):
+            X = sample['input']#.to(device)
+            targets = sample['target']#.to(device)
+            logits = model(X)
+            for j, threshold in enumerate(thresholds):
+                sample_to_f1[i,j] = f1_score(logits, targets, threshold=threshold, average=False).item()
+    
+    # ODS: The best F-measure on the data set for a fixed scale
+    avg_f1_per_t = sample_to_f1.mean(dim=0)
+    ods['f1'], best_t_idx = avg_f1_per_t.max(dim=0)
+    ods['threshold'] = thresholds[best_t_idx]
+    
+    # OIS: The aggregate F-measure on the data set for the best scale in each image
+    best_f1_per_img, best_t_idx_per_img = sample_to_f1.max(dim=1)
+    ois['f1'] = best_f1_per_img.mean()
+    ois['thresholds'] = thresholds[best_t_idx_per_img].tolist()
+    
+    return ods, ois
 
 unnormalize_imagenet_3C = T.Compose([T.Normalize(mean=[0.,0.,0.], std=[1/0.229,1/0.224,1/0.225]),
                                      T.Normalize(mean=[-0.485,-0.456,-0.406], std=[1.,1.,1.])])
@@ -227,6 +260,7 @@ LOSSES = {
 
 METRICS = {
     "f1": f1_score,
+    "o_scores": o_scores,
     "accuracy": accuracy,
 }
 
@@ -414,6 +448,7 @@ class Solver(object):
         return epoch, mean_val_loss, mean_val_score
 
     def test(self, model, test_loader, test_args):
+        # TODO: Requires testing
         model.to(self.device)
         model.eval()
 

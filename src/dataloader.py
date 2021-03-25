@@ -114,6 +114,7 @@ class FurrowDataset(Dataset):
     def get_frame_files(self, idx, load_darr, load_rgb, load_drgb, load_edge, load_time):
         # General purpose method to load data only
         data_path = self.data_args['data_path']
+        allow_missing_files = self.data_args.get('allow_missing_files', False)
         
         frame_id = self.frame_ids[idx]
         augs, tag = [], ''
@@ -134,6 +135,9 @@ class FurrowDataset(Dataset):
                 frame_files['edge_pixels'] = np.load(edge_file) # np.array: np.int64
             except FileNotFoundError: # TODO: Add a flag to force an error if desired
                 frame_files['edge_pixels'] = []
+                if not allow_missing_files:
+                    print(f"{edge_file} does not exist. Use allow_missing_files=True to allow empty edge masks.")
+                    exit(-1)
 
         # Load depth as array only
         if load_darr:
@@ -184,7 +188,9 @@ class FurrowDataset(Dataset):
             target_trans.append(T_MAP['crop_down'])
         
         frame_files = self.get_frame_files(idx, load_darr, load_rgb, load_drgb, load_edge, load_time)
-        sample = {}
+        sample = {
+            # "frame_id": frame_files["frame_id"]
+        }
         
         # Target: edge_pixels -> edge_mask -> transform (if loaded)
         if load_edge:
