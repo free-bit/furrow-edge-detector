@@ -310,7 +310,6 @@ def apply_dsift(gray_image, visualize=True, top_n=100, **kwargs):
 def apply_sift(gray_image, visualize=True, **kwargs):
     print("Applying SIFT with args:", kwargs)
     corners, descr = sift(gray_image, compute_descriptor=True, **kwargs)
-    # TODO: Enhance
     # descr_norm = np.linalg.norm(descr, ord=2, axis=1)
     # top_corners = np.argsort(descr_norm)[-top_n:]
     # corners = corners[top_corners]

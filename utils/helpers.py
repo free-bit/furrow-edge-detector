@@ -270,7 +270,7 @@ def overlay_coord(image, yx, thickness=1, color='springgreen'):
     return overlaid
 
 def overlay_mask(image, mask, color='springgreen'):
-    """image and mask have to be in [0,1]"""
+    """Image and mask have to be in [0,1]"""
     overlaid = image.copy() / 255
     color = colors.to_rgb(color) if len(image.shape) == 3 else 1
     alpha_fg = mask[:,:,np.newaxis]

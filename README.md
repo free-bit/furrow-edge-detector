@@ -32,6 +32,14 @@
 
 [Template Matching](https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_imgproc/py_template_matching/py_template_matching.html)
 
+### PyTorch
+
+[Binary Cross Entropy Loss](https://pytorch.org/docs/stable/generated/torch.nn.BCEWithLogitsLoss.html)
+
+### Torchvision
+
+[Models](https://pytorch.org/vision/stable/models.html)
+
 ### scikit-image
 
 [General Examples for scikit-image](https://scikit-image.org/docs/dev/auto_examples/)

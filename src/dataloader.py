@@ -133,7 +133,7 @@ class FurrowDataset(Dataset):
             edge_file = os.path.join(data_path, edge_file)
             try:
                 frame_files['edge_pixels'] = np.load(edge_file) # np.array: np.int64
-            except FileNotFoundError: # TODO: Add a flag to force an error if desired
+            except FileNotFoundError:
                 frame_files['edge_pixels'] = []
                 if not allow_missing_files:
                     print(f"{edge_file} does not exist. Use allow_missing_files=True to allow empty edge masks.")

@@ -448,31 +448,24 @@ class Solver(object):
         return epoch, mean_val_loss, mean_val_score
 
     def test(self, model, test_loader, test_args):
-        # TODO: Requires testing
         model.to(self.device)
         model.eval()
 
         input_format = test_args.get('input_format', 'darr')
         max_vis = test_args.get('max_vis', 5)
-        results = []
 
         with torch.no_grad():
             for iter, batch in enumerate(tqdm(test_loader), 1):
                 X = batch['input'].to(self.device)
-                targets = batch['target'].to(self.device)
                 logits = model(X)
-                output = logits.mean(dim=1, keepdims=True) # TODO: Try out different stuff here, currently: mean(sideouts, fusion)
-                preds = torch.sigmoid(output)
+                preds = torch.sigmoid(logits)
+                output = preds[:,5:6,:,:]
 
                 X_lst = revert_input_transforms(X, input_format)
-                img_grid = prepare_batch_visualization([*X_lst, preds[:,5:6,:,:], targets], max_items=max_vis)
-                self.writers['Test'].add_image("Input/Prediction/Target", img_grid, global_step=iter)
+                img_grid = prepare_batch_visualization([*X_lst, output], max_items=max_vis)
+                self.writers['Test'].add_image("Input/Prediction", img_grid, global_step=iter)
                 self.writers['Test'].flush()
-
-                # results.append(preds)
         
-        return results
-
     def __str__(self):
         device = self.solver_args["device"]
         loss_func = self.solver_args["loss_func"]
