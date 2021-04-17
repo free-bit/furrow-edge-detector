@@ -1,6 +1,5 @@
 import json
 import os
-# import signal
 
 import numpy as np
 import torch
@@ -8,25 +7,10 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms as T
 from torchvision.utils import make_grid
-from time import time
 from tqdm.auto import tqdm
 
 from src.model import RidgeDetector
 from utils.helpers import take_items
-
-EXIT = False
-
-# def interrupt_handler(signum, frame):
-#     global EXIT
-    
-#     EXIT = not EXIT
-
-#     if EXIT:
-#         print("\nResuming execution.")
-#     else:
-#         print("\nTerminating.")
-
-# signal.signal(signal.SIGINT, interrupt_handler)
 
 EPS = torch.finfo(torch.float64).eps
 
@@ -37,12 +21,14 @@ optimizers = {
 }
 
 def optim_to_device(optim, device):
+    """Move optimizer content to specified device"""
     for state in optim.state.values():
         for k, v in state.items():
             if torch.is_tensor(v):
                 state[k] = v.to(device)
 
 def save_checkpoint(ckpt_path, epoch, model, optim, loss=None, score=None):
+    """Given checkpoint path, current model, optim instances, save their states and configs."""
     checkpoint = { 
         'epoch': epoch,
         'loss': loss,
@@ -59,6 +45,7 @@ def save_checkpoint(ckpt_path, epoch, model, optim, loss=None, score=None):
     print(f"Checkpoint saved at epoch-{epoch}.")
 
 def load_checkpoint(ckpt_path):
+    """Given checkpoint path, create model, optim instances based on stored configs, load their states and return."""
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     checkpoint = torch.load(ckpt_path)
     last_epoch = checkpoint["epoch"]
@@ -82,15 +69,16 @@ def load_checkpoint(ckpt_path):
     return last_epoch, last_loss, last_score, model, optim, model_args, optim_choice, optim_args
 
 def class_balanced_bce(logits, targets, pos_count=2000):
+    """Binary Cross Entropy in which loss for false negatives is weighted up to favor higher recall."""
     shape, device = targets.shape, targets.device
     total = np.prod(shape[2:4])                                  # total pixel count: scalar
     
-    # If expected count is provided, directly use it.
+    # If expected + (edge pixel) count is provided, directly use it.
     if pos_count > 0:
         pos_count = torch.full((*shape[0:2], 1, 1), pos_count,   # + count per image: Bx6x1x1
                                 device=device)
     
-    # Otherwise compute it from target.
+    # Otherwise dynamically compute it from target.
     else:
         pos_count = torch.sum(targets, dim=(2,3), keepdim=True)  # + count per image: Bx6x1x1
     
@@ -108,8 +96,8 @@ def class_balanced_bce(logits, targets, pos_count=2000):
     return loss
 
 def accuracy(logits, targets, threshold=0.5, average=True):
+    # Soft probabilities -> Hard binary labels
     preds = torch.sigmoid(logits) > threshold
-    total = np.prod(preds.shape[2:4])
 
     pred_edge = preds.bool()
     pred_non_edge = ~pred_edge
@@ -118,6 +106,7 @@ def accuracy(logits, targets, threshold=0.5, average=True):
     
     tp = (pred_edge & gt_edge).sum(dim=(2,3))         # Pred: Edge,     Target: Edge
     tn = (pred_non_edge & gt_non_edge).sum(dim=(2,3)) # Pred: Non-Edge, Target: Non-Edge
+    total = np.prod(preds.shape[2:4])
     accuracy = (tp + tn) / total
     
     if average:
@@ -126,6 +115,7 @@ def accuracy(logits, targets, threshold=0.5, average=True):
     return accuracy
 
 def f1_score(logits, targets, threshold=0.5, average=True):
+    # Soft probabilities -> Hard binary labels
     preds = torch.sigmoid(logits) > threshold
     
     pred_edge = preds.bool()
@@ -139,9 +129,9 @@ def f1_score(logits, targets, threshold=0.5, average=True):
     
     precision = tp / (tp + fp)
     recall = tp / (tp + fn)
-    f1 = (2 * precision * recall) / (precision + recall) # torch.maximum(EPS, (precision + recall))
+    f1 = (2 * precision * recall) / (precision + recall) # Perhaps, torch.maximum(EPS, (precision + recall)) in dominator to avoid nan's.
 
-    f1[f1 != f1] = 0 # nan -> 0
+    f1[f1 != f1] = 0 # Replace: nan -> 0
 
     if average:
         f1 = f1.mean()
@@ -151,7 +141,7 @@ def f1_score(logits, targets, threshold=0.5, average=True):
     return f1
 
 def o_scores(model, loader, num_t=100):
-    # TODO: Requires testing
+    # TODO: UNTESTED code, requires testing and possibly debugging
     # Scores to return
     ois, ods = {}, {}
     # Different threshold levels
@@ -181,13 +171,16 @@ def o_scores(model, loader, num_t=100):
     
     return ods, ois
 
+# Transform for undoing 3C ImageNet normalization
 unnormalize_imagenet_3C = T.Compose([T.Normalize(mean=[0.,0.,0.], std=[1/0.229,1/0.224,1/0.225]),
                                      T.Normalize(mean=[-0.485,-0.456,-0.406], std=[1.,1.,1.])])
 
+# Transform for undoing 1C ImageNet normalization
 unnormalize_imagenet_1C = T.Compose([T.Normalize(mean=0., std=1/0.226),
                                      T.Normalize(mean=-0.449, std=1.)])
 
 def revert_input_transforms(X, input_format):
+    """Method used to undo data normalization on the input X. Undoing is performed based on the input_format."""
     X_lst = []
     if input_format in ("darr", "rgb", "drgb"):
         X_lst.append(unnormalize_imagenet_3C(X))
@@ -253,11 +246,13 @@ def prepare_batch_visualization(batch_groups, start=0, end=np.inf, max_items=3):
 
         return img_grid
 
+# Available loss functions
 LOSSES = {
     "bce": F.binary_cross_entropy_with_logits, 
     "class_balanced_bce": class_balanced_bce,
 }
 
+# Available metric functions
 METRICS = {
     "f1": f1_score,
     "o_scores": o_scores,
@@ -272,6 +267,7 @@ class Solver(object):
         self.metric_func = METRICS[metric_id]
         self.device = solver_args["device"]
         
+        # Initialize Tensorboard writers. One writer per train, validation and test recording.
         self.writers = {
             "Train": SummaryWriter(os.path.join(solver_args["log_path"], "train")),
             "Validation": SummaryWriter(os.path.join(solver_args["log_path"], "val")),
@@ -310,6 +306,7 @@ class Solver(object):
         self.val_score_hist = []
 
     def forward(self, model, X, targets):
+        """Perform forward pass in model with input X. Compute loss and metric between predictions and targets."""
         # X: Bx3xHxW | Bx4xHxW | Bx6xHxW
         # logits: Bx6xHxW
         # targets: Bx1xHxW
@@ -323,11 +320,36 @@ class Solver(object):
         return logits, loss, score
 
     def backward(self, optim, loss):
+        """Perform backpropagation and weight updates."""
         loss.backward()
         optim.step()
         optim.zero_grad()
 
     def run_one_epoch(self, epoch, loader, model, optim=None, args={}):
+        """
+        Train/Validate the given model on data in data loader with respect to arguments for one epoch.
+        Train or validation is decided through given model's mode.
+
+        Parameters
+        ----------
+        epoch : int
+            Current epoch number.
+        loader : torch.utils.data.DataLoader
+            Batched training/validation data.
+        model : RidgeDetector
+            Network model instance.
+        optim : torch.optim.X
+            Optimizer to use, only in training mode. (e.g. Adam, SGD...)
+        args : dict
+            Various arguments to control training and validation logging (*log_freq, *vis_freq), behaviour (input_format).
+
+        Returns 
+        -------
+        mean_loss : float
+            Validation loss after one epoch is finished.
+        mean_score : float
+            Validation metric score after one epoch is finished.
+        """
         mode = ""
         log_freq = 0
         vis_freq = 0
@@ -362,14 +384,17 @@ class Solver(object):
             losses.append(loss)
             scores.append(score)
 
+            # Tensorboard logging
             global_iter = iter + offset
             writer.add_scalar(f'Batch/Loss/', loss, global_iter)
             writer.add_scalar(f'Batch/Score/', score, global_iter)
             writer.flush()
 
+            # Console logging
             if log_freq > 0 and iter % log_freq == 0:
                 print(f"[Iteration {iter}/{total_iter}] {mode} loss/score: {loss:.5f}/{score:.5f}")
 
+            # Tensorboard visualization
             if vis_freq > 0 and iter % vis_freq == 0:
                 preds = torch.sigmoid(logits)
                 X_lst = revert_input_transforms(X, input_format)
@@ -384,8 +409,37 @@ class Solver(object):
         return mean_loss, mean_score
 
     def train(self, model, optim, train_loader, val_loader, train_args, scheduler=None):
+        """
+        Train the given model with given optimizer and scheduler on data in train data loader with respect to arguments for training.
+        Also, optionally validate the model periodically.
+
+        Parameters
+        ----------
+        model : RidgeDetector
+            Network model instance.
+        optim : torch.optim.X
+            Optimizer to use. (e.g. Adam, SGD...)
+        train_loader : torch.utils.data.DataLoader
+            Batched training data.
+        val_loader : torch.utils.data.DataLoader
+            Batched validation data.
+        train_args : dict
+            Various arguments to control training and validation duration (start_epoch, end_epoch), behaviour (val_freq) and checkpointing.
+        scheduler : torch.optim.lr_scheduler.X
+            Change learning rate based on logs during training. Here, it is ReduceLROnPlateau.
+
+        Returns 
+        -------
+        epoch : int
+            Final epoch number.
+        mean_val_loss : float
+            Final validation loss after training is finished.
+        mean_val_score : float
+            Final validation metric score after training is finished.
+        """
         model.to(self.device)
 
+        # Defined arguments for training.
         start_epoch = train_args.get('start_epoch', 1)
         ckpt_path = train_args['ckpt_path']
         end_epoch = train_args.get('end_epoch', 10)
@@ -402,16 +456,18 @@ class Solver(object):
             model.train()
             mean_train_loss, mean_train_score = self.run_one_epoch(epoch, train_loader, model, optim, train_args)
 
+            # Console logging
             print(f"[Epoch {epoch}/{end_epoch}] Train mean loss/score: {mean_train_loss:.5f}/{mean_train_score:.5f}")
 
             self.train_loss_hist.append(mean_train_loss)
             self.train_score_hist.append(mean_train_score)
             
+            # Tensorboard logging
             self.writers['Train'].add_scalar('Epoch/Loss/', mean_train_loss, epoch)
             self.writers['Train'].add_scalar('Epoch/Score/', mean_train_score, epoch)
             self.writers['Train'].flush()
 
-            # Perform a full pass over validation data (according to specified period)
+            # Perform a full pass over validation data (according to specified period), disabled for val_freq <= 0
             if val_freq > 0 and epoch % val_freq == 0:
                 model.eval()
                 with torch.no_grad():
@@ -419,11 +475,13 @@ class Solver(object):
                     if scheduler:
                         scheduler.step(mean_val_score)
                     
+                    # Console logging
                     print(f"[Epoch {epoch}/{end_epoch}] Validation mean loss/score: {mean_val_loss:.5f}/{mean_val_score:.5f}")
 
                     self.val_loss_hist.append(mean_val_loss)
                     self.val_score_hist.append(mean_val_score)
 
+                    # Tensorboard logging
                     self.writers['Validation'].add_scalar('Epoch/Loss/', mean_val_loss, epoch)
                     self.writers['Validation'].add_scalar('Epoch/Score/', mean_val_score, epoch)
                     self.writers['Validation'].flush()
@@ -440,10 +498,6 @@ class Solver(object):
             # If checkpointing is enabled and save checkpoint periodically or whenever there is an improvement 
             if make_ckpt:
                 save_checkpoint(ckpt_path, epoch, model, optim, mean_val_loss, mean_val_score)
-
-            # When KeyboardInterrupt is triggered, perform a controlled termination
-            if EXIT:
-                break
 
         return epoch, mean_val_loss, mean_val_score
 

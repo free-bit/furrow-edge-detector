@@ -5,7 +5,6 @@ import os
 
 import numpy as np
 from PIL import Image
-# from scipy.ndimage import shift, rotate
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms as T
@@ -20,6 +19,7 @@ DRGB_EXT = "_depth.png"
 TIME_EXT = "_time.json"
 MAX_DEPTH = 65.53500311274547
 
+# Available transforms for the input or output of the network
 T_MAP = {
     "affine": F.affine,
     "center_crop": T.Lambda(lambda x:  F.center_crop(x, output_size=[400,400])),
@@ -35,7 +35,6 @@ T_MAP = {
 }
 
 class FurrowDataset(Dataset):
-
     def __init__(self, data_args):
         self.data_args = data_args
         self.validate_data_path()
@@ -112,7 +111,7 @@ class FurrowDataset(Dataset):
         return len(self.frame_ids)
 
     def get_frame_files(self, idx, load_darr, load_rgb, load_drgb, load_edge, load_time):
-        # General purpose method to load data only
+        """General purpose method (outside of torch.utils.data.DataLoader) to load data only without any transforms."""
         data_path = self.data_args['data_path']
         allow_missing_files = self.data_args.get('allow_missing_files', False)
         
@@ -164,10 +163,12 @@ class FurrowDataset(Dataset):
         return frame_files
         
     def __getitem__(self, idx):
-        # torch.utils.data.DataLoader class specific method: 
-        # 1) Loads data with get_frame_files
-        # 2) Adjusts input channels (if necessary)
-        # 3) Applies torch transforms
+        """
+        torch.utils.data.DataLoader class specific method: 
+        1) Loads data with idx by using get_frame_files
+        2) Adjusts input channels (if necessary)
+        3) Applies torch transforms
+        """
 
         # Loading data as specified:
         input_format = self.data_args.get("input_format", 'darr')

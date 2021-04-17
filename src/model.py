@@ -7,6 +7,7 @@ class RidgeDetector(nn.Module):
         super().__init__()
 
         layers = vgg16(pretrained=model_args['pretrained']).features
+        # Freeze the pretrained weights if flag is set.
         freeze = model_args.get('freeze', False)
         if freeze:
             for param in layers.parameters():
@@ -27,7 +28,7 @@ class RidgeDetector(nn.Module):
 
         # Depth as array only (C:1)
         elif input_format == "darr":
-            # TODO: Currently using broadcasted input, several alternatives available:
+            # TODO: Currently using broadcasted input (C:1->C:3), several alternatives available:
             # Reduce weights of existing conv layer (avg)
             # Insert a new conv layer with proper channels 
             pass
