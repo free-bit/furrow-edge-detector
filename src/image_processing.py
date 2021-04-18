@@ -2,17 +2,15 @@
 # Define image processing functions to be used here.
 
 import cv2
-from cyvlfeat.sift import sift, dsift, phow
 from matplotlib import pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
 from skimage import filters
 from skimage.transform import hough_line, hough_line_peaks
-from skimage.measure import find_contours
-from skimage.morphology import convex_hull_image, skeletonize
+from skimage.morphology import skeletonize
 from sklearn.linear_model import RANSACRegressor
 
-from utils.helpers import compute_visible_pixels, estimate_ddepth, topk, parabola, show_image, show_corners, show_shapes
+from utils.helpers import compute_visible_pixels, estimate_ddepth, topk, parabola, show_image, show_shapes
 
 def convert_grayscale(image, visualize=True, **kwargs): # **kwargs is ignored
     """Takes an RGB (3 channel) image, returns the grayscale image (1 channel)"""
@@ -287,75 +285,6 @@ def apply_canny(image, visualize=True, **kwargs):
         show_image(image, cmap="gray")
     return image
 
-def apply_shi_tomasi(gray_image, visualize=True, **kwargs):
-    print("Applying Shi-Tomasi with args:", kwargs)
-    corners = cv2.goodFeaturesToTrack(gray_image, **kwargs) # maxCorners=49, qualityLevel=0.1, minDistance=20
-    corners = cv2.cornerSubPix(gray_image, corners, winSize=(11, 11), zeroZone=(-1, -1), criteria=(cv2.TERM_CRITERIA_MAX_ITER | cv2.TERM_CRITERIA_EPS, 20, 0.01))
-    corners = np.squeeze(corners, axis=1) # (N, 1, 2) -> (N, 2)
-    corners[:, [0,1]] = corners[:, [1,0]] # (x, y) -> (row/y, col/x)
-    if visualize:
-        show_corners(gray_image, corners)
-    return corners
-
-def apply_dsift(gray_image, visualize=True, top_n=100, **kwargs):
-    print("Applying dense SIFT with args:", kwargs)
-    corners, descr = dsift(gray_image, **kwargs)
-    descr_norm = np.linalg.norm(descr, ord=2, axis=1)
-    top_corners = np.argsort(descr_norm)[-top_n:]
-    corners = corners[top_corners]
-    if visualize:
-        show_corners(gray_image, corners)
-    return corners
-
-def apply_sift(gray_image, visualize=True, **kwargs):
-    print("Applying SIFT with args:", kwargs)
-    corners, descr = sift(gray_image, compute_descriptor=True, **kwargs)
-    # descr_norm = np.linalg.norm(descr, ord=2, axis=1)
-    # top_corners = np.argsort(descr_norm)[-top_n:]
-    # corners = corners[top_corners]
-    if visualize:
-        kp = []
-        for corner in corners:
-            y, x, r, theta = corner
-            kp.append(cv2.KeyPoint(x, y, r, theta))
-        fig = np.zeros_like(gray_image)
-        fig = cv2.drawKeypoints(gray_image, kp, fig)
-        plt.figure(figsize=(10,10))
-        plt.imshow(fig, cmap="gray")
-        plt.show()
-        # show_corners(gray_image, corners)
-    return corners
-
-def apply_convex_hull(points, shape, visualize=True, **kwargs):
-    """Given a point set, return the vertices of convex polygon contanining it."""
-    points[:,[0,1]] = points[:,[1,0]]       # (row/y, col/x) -> (x, y)
-    vertices = cv2.convexHull(points)
-    vertices = np.squeeze(vertices, axis=1) # (N, 1, 2) -> (N, 2)
-    vertices[:, [0,1]] = vertices[:, [1,0]] # (x, y) -> (y/row, x/col)
-
-    if visualize:
-        show_shapes(np.zeros(shape, dtype=np.uint8), [np.rint(vertices).astype(np.int32)], cmap="gray")
-
-    return vertices
-
-def apply_contour(bin_image, visualize=True, **kwargs):
-    """
-    Takes binary image (obtained with Canny or thresholding) to find contours (which separate white region from black background).
-    'contours' is a list of all the contours in the image. 
-    Each individual contour is a Numpy array of (x,y) coordinates of boundary points of the object.
-    Returns 'contours'.
-    """
-    print("Applying contours with args:", kwargs)
-    _bin_image, contours, _hierarchy = cv2.findContours(bin_image, mode=cv2.RETR_TREE, method=cv2.CHAIN_APPROX_SIMPLE)
-    for i in range(len(contours)):
-        contours[i] = np.squeeze(contours[i], axis=1) # (N, 1, 2) -> (N, 2)
-        contours[i] = contours[i][:, [1,0]] # (x, y) -> (y/row, x/col)
-    
-    if visualize:
-        show_shapes(np.zeros_like(bin_image), contours, shapeIdx=-1, cmap="gray")
-    
-    return contours
-
 def apply_hough_line(bin_image, visualize=True, print_lines=20, plot_hough_space=True, **kwargs):
     """
     Takes binary image (obtained with Canny or thresholding) to find parameters of lines that exist in the image.
@@ -440,6 +369,9 @@ def apply_hough_line(bin_image, visualize=True, print_lines=20, plot_hough_space
         
     return line_list
 
+############################
+# Template Matching Method #
+############################
 def apply_template_matching(depth_arr,
                             template,
                             start_depth=1.0,
@@ -603,6 +535,7 @@ def apply_template_matching(depth_arr,
     num_inliers = inliers.shape[0]
     print("[Info]: Inliers/All: {}/{}, Ratio: {:.2f}".format(num_inliers, num_detections, num_inliers/num_detections))
     
+    # Fit a model (line or curve) to inlier points.
     if fit_type == "line":
         linear_model = model.estimator_
         p = {"m": linear_model.coef_.item(), "b": linear_model.intercept_.item(), "type": "slope"}
@@ -614,46 +547,6 @@ def apply_template_matching(depth_arr,
     else:
         raise NotImplementedError
 
-    # Obtain pixel coordinates for the fitted model to inliers
+    # Obtain pixel coordinates for the fitted model to inliers.
     edge_pixels = compute_visible_pixels(depth_arr.shape, p)
     return edge_pixels, inliers, outliers
-
-# Binding names to actual methods:
-preproc_funcs = {
-    "Grayscale": convert_grayscale,
-    "Contrast": enhance_contrast,
-    "Dilation": apply_dilation,
-    "Erosion": apply_erosion,
-    "Opening": apply_opening,
-    "Closing": apply_closing,
-    "Threshold": apply_threshold,
-    "Otsu Threshold": apply_otsu_threshold,
-    "Adaptive Threshold": apply_adaptive_threshold,
-    "Spatial Threshold": apply_spatial_threshold,
-    "ROI Threshold": apply_roi_threshold,
-    "Average Blur": apply_avg_blur,
-    "Median Blur": apply_median_blur,
-    "Bilateral Filter": apply_bilateral_filter,
-    "Gaussian Blur": apply_gaussian_blur,  
-    "Laplacian": apply_laplacian,
-    "Sobel Vertical": apply_sobelv,
-    "Sobel Horizontal": apply_sobelh,
-}
-
-detect_funcs = {
-    "Canny Edges": apply_canny,
-    "Contour": apply_contour,
-    "Shi Tomasi": apply_shi_tomasi,
-    "Dense SIFT": apply_dsift,
-    "SIFT": apply_sift,
-    "Hough Line": apply_hough_line,
-}
-
-funcs = {**preproc_funcs, **detect_funcs}
-
-def apply_functions(image, func_stack, config_stack):
-    show_image(image)
-    for i in range(len(func_stack)):
-        key = func_stack[i]
-        image = funcs[key](image, **config_stack[i])
-    return image

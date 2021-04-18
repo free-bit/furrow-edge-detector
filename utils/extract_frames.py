@@ -232,7 +232,7 @@ def main():
         # Print timestamp for current frame
         print("Iteration: {}, Frame: {}, Frame ID: {}, Capture Time: {}".format(iter, extracted, frame_id, frame_stamp))
 
-        ## Store RGB Data
+        # Store RGB Data
         color = np.asanyarray(color_frame.get_data())
         image = Image.fromarray(color)
         rgb_name = filename.format(name=frame_id, type="rgb", ext="png")

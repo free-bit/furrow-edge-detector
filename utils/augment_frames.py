@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 from scipy.ndimage import shift, rotate
 
-from utils.helpers import coord_to_mask, prepare_overlay
+from utils.helpers import coord_to_mask
 
 AUG_LIST = ['m', 't', 'r', 't-r', 'r-t', 'm-t', 'm-r', 'm-t-r', 'm-r-t']
 
