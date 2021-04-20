@@ -1,24 +1,24 @@
-name: cv-in-farming
+name: furrow-edge-detector
 channels:
   - menpo
   - anaconda
   - conda-forge
-  - open3d-admin
+  - pytorch
   - defaults
 dependencies:
-  - scikit-image=0.17.2
+  - matplotlib=3.3.3
   - scipy=1.5.2
   - opencv=3.4.2
+  - pillow=8.0.1
+  - scikit-image=0.17.2
+  - scikit-learn=0.23.2
+  - pytorch=1.7.0
+  - torchvision=0.8.1
+  - cudatoolkit=11.0.221
   - notebook=6.1.5
+  - ffmpeg=4.0
   - jupyter_contrib_nbextensions=0.5.1
   - ipywidgets=7.5.1
   - widgetsnbextension=3.5.1
-  - matplotlib=3.3.3
-  - pandas=1.1.3
-  - pillow=8.0.1
-  - scikit-learn=0.23.2
-  - open3d=0.11.2
-  - addict=2.3.0
-  - plyfile=0.7.2
   - tqdm=4.55.1
 prefix: /home/cengerkin/anaconda3/envs/cv-in-farming
