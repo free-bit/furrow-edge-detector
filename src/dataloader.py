@@ -111,7 +111,7 @@ class FurrowDataset(Dataset):
         return len(self.frame_ids)
 
     def get_frame_files(self, idx, load_darr, load_rgb, load_drgb, load_edge, load_time):
-        """General purpose method (outside of torch.utils.data.DataLoader) to load data only without any transforms."""
+        """General purpose method (outside of torch.utils.data.DataLoader) to load data only without any transforms (transforms are ignored here)."""
         data_path = self.data_args['data_path']
         allow_missing_files = self.data_args.get('allow_missing_files', False)
         

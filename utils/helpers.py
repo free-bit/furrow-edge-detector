@@ -215,9 +215,9 @@ def show_image_pairs(left, right, h=15, w=15):
     ax[1].imshow(right)
     plt.show()
 
-def shift_pixels(depth_arr, pixel_coords, intrinsics, shift3D=[-0.25, 0, 0]):
+def generate_edge(depth_arr, edge1, intrinsics, shift3D=[-0.25, 0, 0]):
     """
-    Given a translation vector in 3D in meters, compute new pixel coordinates.
+    Given a translation vector in 3D in meters, compute pixel coordinates for the new edge.
     Instead of doing a 3D translation followed by a projection (a),
     translation vector is projected and projected vector is applied on 2D (b).
     (a) 2D -> 3D translate -> 2D
@@ -229,20 +229,42 @@ def shift_pixels(depth_arr, pixel_coords, intrinsics, shift3D=[-0.25, 0, 0]):
       1) dx = fx * 0.25 / depth
       2) round(x1 - dx)
     """
-    depths = depth_arr[pixel_coords[:,0], pixel_coords[:,1]]
+    depths = depth_arr[edge1[:,0], edge1[:,1]]
     dx, dy, dz = shift3D
     fx, fy = intrinsics.fx, intrinsics.fy
     depths += dz
     dx = fx * dx / depths
     dy = fy * dy / depths
-    shifted = np.rint(pixel_coords + np.c_[dy, dx]).astype(np.int32)
-    return shifted
+    edge2 = np.rint(edge1 + np.c_[dy, dx]).astype(np.int32)
+    return edge2
 
-def generate_lane_pixels(left, right, pixel_offset=0, num_lane=15):
-    mid = np.rint((left + right) / 2).astype(np.int32)
-    mid = mid[pixel_offset:]
-    segments = np.array_split(mid, num_lane)
-    return segments[::2]
+def generate_lane_pixels(edge1, edge2, top_offset=0, bot_offset=1, num_lane=15):
+    """
+    Given pixels coordinates for two edges of the road, compute pixel coordinates for artificial lanes in between.
+    
+    Parameters
+    ----------
+    edge1 : ndarray
+        Pixel coordinates for the first edge of the road, with shape Nx2
+    edge2 : ndarray
+        Pixel coordinates for the second edge of the road, with shape Nx2
+    top_offset : int
+        Offset from the top for drawing lane in pixels along y axis
+    bot_offset : int
+        Offset from the bottom for drawing lane in pixels along y axis
+    num_lane : int
+        Number of lanes to fit on the road
+
+    Returns 
+    -------
+    lanes : ndarray
+        Pixel coordinates of each lane, with shape Mx2
+    """
+    mid = np.rint((edge1 + edge2) / 2).astype(np.int32)
+    length = slice(top_offset, -bot_offset) if bot_offset else slice(top_offset, None)
+    mid = mid[length]
+    lanes = np.array_split(mid, num_lane)
+    return lanes[::2]
 
 def project(cam_coords, intrinsics):
     # Unused but might be useful later.
